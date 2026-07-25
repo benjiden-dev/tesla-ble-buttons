@@ -192,8 +192,20 @@ actor VehicleService {
     private var cachedSnapshotValue: TeslaVehicleSnapshot?
     private var cachedSnapshotAt: Date?
 
+    /// Drive-state fast path (a few hundred ms round-trip, designed for
+    /// gauge-speed polling). Connected-only, same contract as
+    /// `fetchSnapshotIfConnected` — nil without a live session.
+    func fetchDriveIfConnected() async throws -> DriveState? {
+        guard let existing = client else { return nil }
+        let state = await existing.state
+        guard state == .connected else { return nil }
+        let drive = try await existing.fetchDrive()
+        scheduleIdleTeardown()
+        return drive
+    }
+
     /// The most recent snapshot if it's fresh enough (default 20s — the
-    /// dashboard polls every 8s while visible). Used to skip commands whose
+    /// dashboard polls every 5s while visible). Used to skip commands whose
     /// target state is already true, without a live round-trip per tap.
     func cachedSnapshot(maxAge: TimeInterval = 20) -> TeslaVehicleSnapshot? {
         guard

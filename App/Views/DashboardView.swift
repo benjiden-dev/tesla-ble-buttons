@@ -45,6 +45,9 @@ struct DashboardView: View {
 
     private let executor: TeslaCommandExecutor
 
+    /// Only the visible TabView page polls; the parent flips this.
+    private let isActive: Bool
+
     /// Snapshot poll cadence while the dashboard is on screen and someone
     /// is around to look at it.
     private static let snapshotPollSeconds = 5
@@ -53,7 +56,8 @@ struct DashboardView: View {
     /// (local state read only — zero BLE traffic).
     private static let pausedProbeSeconds = 10
 
-    init(executor: TeslaCommandExecutor = TeslaCommandExecutor()) {
+    init(isActive: Bool = true, executor: TeslaCommandExecutor = TeslaCommandExecutor()) {
+        self.isActive = isActive
         self.executor = executor
     }
 
@@ -111,7 +115,10 @@ struct DashboardView: View {
             }
             Button("Cancel", role: .cancel) { pendingConfirmation = nil }
         }
-        .task { await pollSnapshot() }
+        .task(id: isActive) {
+            guard isActive else { return }
+            await pollSnapshot()
+        }
     }
 
     // MARK: - Floating chrome

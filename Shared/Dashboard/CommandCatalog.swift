@@ -39,8 +39,9 @@ struct CatalogCommand: Identifiable, Sendable {
     let confirmation: ConfirmationRequirement
     /// @Sendable so `CatalogCommand` (and the global `CommandCatalog.all`)
     /// satisfies Swift 6 strict concurrency — the closures only touch the
-    /// stateless executor, so this is safe by construction.
-    let action: @Sendable (TeslaCommandExecutor) async throws -> Void
+    /// stateless executor, so this is safe by construction. Returns the
+    /// outcome so the UI can distinguish "done" from "was already set".
+    let action: @Sendable (TeslaCommandExecutor) async throws -> CommandOutcome
 }
 
 /// Do NOT add security(.addKey), security(.removeKey), or
@@ -59,7 +60,7 @@ enum CommandCatalog {
             confirmation: .none,
             action: { executor in
                 try await executor.climateOn()
-                try await executor.setTemperature(fahrenheit: 68)
+                return try await executor.setTemperature(fahrenheit: 68)
             },
         ),
         CatalogCommand(
@@ -70,7 +71,7 @@ enum CommandCatalog {
             confirmation: .none,
             action: { executor in
                 try await executor.climateOn()
-                try await executor.setTemperature(fahrenheit: 72)
+                return try await executor.setTemperature(fahrenheit: 72)
             },
         ),
         CatalogCommand(
@@ -81,7 +82,7 @@ enum CommandCatalog {
             confirmation: .none,
             action: { executor in
                 try await executor.climateOn()
-                try await executor.maxDefrost()
+                return try await executor.maxDefrost()
             },
         ),
         CatalogCommand(

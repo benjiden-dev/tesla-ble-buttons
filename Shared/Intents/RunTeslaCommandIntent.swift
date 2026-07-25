@@ -48,7 +48,10 @@ struct RunTeslaCommandIntent: AppIntent {
         guard PairedVehicle.storedVIN != nil else {
             throw TeslaButtonsError.notPaired
         }
-        try await VehicleService.shared.run(command.bleCommand)
+        let outcome = try await VehicleService.shared.run(command.bleCommand)
+        if case .alreadySatisfied = outcome {
+            return .result(dialog: "Already set — no change needed.")
+        }
         return .result(dialog: IntentDialog(stringLiteral: command.successDialog))
     }
 }

@@ -16,6 +16,15 @@ import Foundation
 import OSLog
 import TeslaBLE
 
+/// How a command request concluded. `alreadySatisfied` means the vehicle (or
+/// a preemptive state check) reported the requested state is already in
+/// effect — the goal is met, so callers should treat it as success and at
+/// most show a quiet notice.
+enum CommandOutcome: Sendable {
+    case executed
+    case alreadySatisfied(reason: String?)
+}
+
 actor VehicleService {
     static let shared = VehicleService()
 
@@ -109,10 +118,41 @@ actor VehicleService {
     /// Ensures a live signed session, sends the command, then (when the app
     /// UI isn't in the foreground) schedules an idle teardown so background
     /// launches don't hold BLE forever.
-    func run(_ command: Command) async throws {
+    ///
+    /// Vehicles reject redundant commands (e.g. setting the charge limit to
+    /// its current value) with an "already …" style reason. Those are
+    /// treated as success (`.alreadySatisfied`) rather than thrown — the
+    /// requested state is in effect either way.
+    @discardableResult
+    func run(_ command: Command) async throws -> CommandOutcome {
         let session = try await ensureConnected()
-        try await session.send(command)
-        scheduleIdleTeardown()
+        do {
+            try await session.send(command)
+            scheduleIdleTeardown()
+            return .executed
+        } catch let error as TeslaBLEError {
+            scheduleIdleTeardown()
+            if case .commandRejected(_, let reason) = error, Self.isBenignRejection(reason) {
+                logger.info("redundant command (\(reason ?? "already set", privacy: .public)) — treated as success")
+                return .alreadySatisfied(reason: reason)
+            }
+            logger.error("command failed: \(String(describing: error), privacy: .public)")
+            throw error
+        } catch {
+            scheduleIdleTeardown()
+            logger.error("command failed: \(String(describing: error), privacy: .public)")
+            throw error
+        }
+    }
+
+    /// Rejection reasons that mean "the requested state is already true".
+    /// Deliberately narrow — unknown reasons stay errors.
+    private static func isBenignRejection(_ reason: String?) -> Bool {
+        guard let reason = reason?.lowercased() else { return false }
+        return reason.contains("already")
+            || reason.contains("not_charging")
+            || reason.contains("not charging")
+            || reason.contains("is_charging")
     }
 
     func setPinned(_ value: Bool) {
@@ -136,14 +176,32 @@ actor VehicleService {
     /// Fetches a full state snapshot, but only when a session is already
     /// live — returns nil otherwise so UI polls never trigger BLE scan
     /// loops while away from the car. Refreshes the idle-teardown window
-    /// like any other traffic.
+    /// like any other traffic, and feeds the short-lived state cache used
+    /// for preemptive no-op checks.
     func fetchSnapshotIfConnected() async throws -> TeslaVehicleSnapshot? {
         guard let existing = client else { return nil }
         let state = await existing.state
         guard state == .connected else { return nil }
         let snapshot = try await existing.fetch(.all)
+        cachedSnapshotValue = snapshot
+        cachedSnapshotAt = Date()
         scheduleIdleTeardown()
         return snapshot
+    }
+
+    private var cachedSnapshotValue: TeslaVehicleSnapshot?
+    private var cachedSnapshotAt: Date?
+
+    /// The most recent snapshot if it's fresh enough (default 20s — the
+    /// dashboard polls every 8s while visible). Used to skip commands whose
+    /// target state is already true, without a live round-trip per tap.
+    func cachedSnapshot(maxAge: TimeInterval = 20) -> TeslaVehicleSnapshot? {
+        guard
+            let cachedSnapshotValue,
+            let cachedSnapshotAt,
+            Date().timeIntervalSince(cachedSnapshotAt) <= maxAge
+        else { return nil }
+        return cachedSnapshotValue
     }
 
     // MARK: - Internals

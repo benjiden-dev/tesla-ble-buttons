@@ -31,6 +31,7 @@ struct DashboardView: View {
     @State private var isEditing = false
     @State private var runningID: String?
     @State private var commandError: String?
+    @State private var commandNotice: String?
     @State private var snapshot: TeslaVehicleSnapshot?
 
     // Last-sent local state for controls the snapshot doesn't report back.
@@ -215,7 +216,7 @@ struct DashboardView: View {
         _ symbol: String,
         id: String,
         title: String,
-        action: @escaping @Sendable (TeslaCommandExecutor) async throws -> Void,
+        action: @escaping @Sendable (TeslaCommandExecutor) async throws -> CommandOutcome,
     ) -> some View {
         Button {
             runRaw(id: id, title: title) { try await action(executor) }
@@ -370,21 +371,29 @@ struct DashboardView: View {
         .contentMargins(.top, 52, for: .scrollContent)
     }
 
-    /// Floating bottom banner for command failures; tap to dismiss. Lives
-    /// outside the scroll views so it's visible in both orientations.
+    /// Floating bottom banner: red for real failures, quiet secondary for
+    /// "already set" notices (which also auto-dismiss). Tap to dismiss.
+    /// Lives outside the scroll views so it's visible in both orientations.
     @ViewBuilder
     private var errorBanner: some View {
-        if let commandError {
-            Text(commandError)
+        if let text = commandError ?? commandNotice {
+            Text(text)
                 .font(.footnote)
-                .foregroundStyle(.red)
+                .foregroundStyle(
+                    commandError != nil
+                        ? AnyShapeStyle(.red)
+                        : AnyShapeStyle(.secondary),
+                )
                 .lineLimit(2)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal)
                 .padding(.bottom, 8)
-                .onTapGesture { self.commandError = nil }
+                .onTapGesture {
+                    commandError = nil
+                    commandNotice = nil
+                }
         }
     }
 
@@ -443,27 +452,47 @@ struct DashboardView: View {
     }
 
     /// Single-flight command runner: one command at a time, busy spinner on
-    /// the triggering control, failures surfaced in the error line.
+    /// the triggering control. Real failures go to the red error banner;
+    /// "already set" outcomes show a quiet auto-dismissing notice instead.
     /// `onFailure` lets stateful controls (keeper, vents) revert their
     /// last-sent appearance when the send fails.
     private func runRaw(
         id: String,
         title: String,
         onFailure: (() -> Void)? = nil,
-        _ action: @escaping @Sendable () async throws -> Void,
+        _ action: @escaping @Sendable () async throws -> CommandOutcome,
     ) {
         guard runningID == nil else { return }
         runningID = id
         commandError = nil
+        commandNotice = nil
         Task {
             do {
-                try await action()
+                let outcome = try await action()
+                if case .alreadySatisfied(let reason) = outcome {
+                    showNotice("\(title): \(Self.prettyReason(reason))")
+                }
             } catch {
                 commandError = "\(title): \(Self.message(for: error))"
                 onFailure?()
             }
             runningID = nil
         }
+    }
+
+    private func showNotice(_ text: String) {
+        commandNotice = text
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            if commandNotice == text {
+                commandNotice = nil
+            }
+        }
+    }
+
+    private static func prettyReason(_ reason: String?) -> String {
+        guard let reason, !reason.isEmpty else { return "already set" }
+        return reason.replacingOccurrences(of: "_", with: " ")
     }
 
     // MARK: - Snapshot
@@ -488,6 +517,14 @@ struct DashboardView: View {
     }
 
     private static func message(for error: Error) -> String {
+        if let ble = error as? TeslaBLEError,
+           case .commandRejected(let code, let reason) = ble
+        {
+            if let reason {
+                return "rejected (\(prettyReason(reason)))"
+            }
+            return "rejected (code \(code))"
+        }
         if let localized = (error as? LocalizedError)?.errorDescription {
             return localized
         }

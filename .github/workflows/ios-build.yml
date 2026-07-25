@@ -25,24 +25,28 @@ jobs:
           set -euo pipefail
           echo "Available Xcode apps:"
           ls /Applications | grep -E '^Xcode' || true
-          # Prefer a recent stable Xcode; fall back to default Xcode.app
+          # TeslaBLE requires Swift tools 6.2 → need Xcode 26+
           for candidate in \
-            /Applications/Xcode_16.4.app \
-            /Applications/Xcode_16.3.app \
-            /Applications/Xcode_16.2.app \
-            /Applications/Xcode_16.1.app \
-            /Applications/Xcode_16.0.app \
-            /Applications/Xcode_26.0.app \
+            /Applications/Xcode_26.6.app \
+            /Applications/Xcode_26.5.app \
+            /Applications/Xcode_26.4.1.app \
+            /Applications/Xcode_26.4.app \
+            /Applications/Xcode_26.3.app \
+            /Applications/Xcode_26.2.app \
+            /Applications/Xcode_26.1.1.app \
             /Applications/Xcode_26.1.app \
+            /Applications/Xcode_26.0.1.app \
+            /Applications/Xcode_26.0.app \
             /Applications/Xcode.app
           do
             if [ -d "$candidate" ]; then
               echo "Selecting $candidate"
-              sudo -S -p '' xcode-select -s "$candidate"
+              sudo xcode-select -s "$candidate"
               break
             fi
           done
           xcodebuild -version
+          swift --version
           xcrun simctl list runtimes || true
 
       - name: Install XcodeGen

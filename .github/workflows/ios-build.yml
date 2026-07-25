@@ -1,0 +1,81 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (iOS Simulator)
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          echo "Available Xcode apps:"
+          ls /Applications | grep -E '^Xcode' || true
+          # Prefer a recent stable Xcode; fall back to default Xcode.app
+          for candidate in \
+            /Applications/Xcode_16.4.app \
+            /Applications/Xcode_16.3.app \
+            /Applications/Xcode_16.2.app \
+            /Applications/Xcode_16.1.app \
+            /Applications/Xcode_16.0.app \
+            /Applications/Xcode_26.0.app \
+            /Applications/Xcode_26.1.app \
+            /Applications/Xcode.app
+          do
+            if [ -d "$candidate" ]; then
+              echo "Selecting $candidate"
+              sudo -S -p '' xcode-select -s "$candidate"
+              break
+            fi
+          done
+          xcodebuild -version
+          xcrun simctl list runtimes || true
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project TeslaButtons.xcodeproj \
+            -scheme TeslaButtons
+
+      - name: Build for iOS Simulator
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project TeslaButtons.xcodeproj \
+            -scheme TeslaButtons \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY=- \
+            build
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-derived-data-logs
+          path: |
+            DerivedData/Logs
+          if-no-files-found: ignore
+          retention-days: 7

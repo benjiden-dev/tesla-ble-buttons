@@ -77,22 +77,12 @@ struct DashboardView: View {
                 .padding(.horizontal)
                 .padding(.bottom)
             }
+            .contentMargins(.top, 52, for: .scrollContent)
         }
-        .navigationTitle("Dashboard")
-        .navigationBarTitleDisplayMode(.inline)
-        .safeAreaInset(edge: .top, spacing: 0) { header }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationLink {
-                    SettingsView()
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { isEditing = true }
-            }
-        }
+        // No navigation bar on the dashboard — discrete floating controls
+        // instead (the pushed Settings screen shows its own bar + back).
+        .toolbar(.hidden, for: .navigationBar)
+        .overlay(alignment: .top) { floatingBar }
         .sheet(isPresented: $isEditing) {
             EditDashboardView(store: store)
         }
@@ -115,37 +105,69 @@ struct DashboardView: View {
         .task { await pollSnapshot() }
     }
 
-    // MARK: - Header
+    // MARK: - Floating chrome
 
-    private var header: some View {
+    /// Discrete floating controls in place of a navigation bar: settings
+    /// (top-left), status capsule beside it, edit (top-right). Content
+    /// scrolls underneath.
+    private var floatingBar: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(model.statusColor)
-                .frame(width: 10, height: 10)
-            Text(model.statusLabel)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            NavigationLink {
+                SettingsView()
+            } label: {
+                floatingIcon("gearshape.fill")
+            }
+
+            statusCapsule
+
             Spacer()
-            Text(headerStats)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
+
+            Button {
+                isEditing = true
+            } label: {
+                floatingIcon("pencil")
+            }
         }
         .padding(.horizontal)
-        .padding(.vertical, 6)
-        .background(.bar)
+        .padding(.top, 4)
     }
 
-    private var headerStats: String {
+    private func floatingIcon(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .padding(9)
+            .background(.thinMaterial, in: Circle())
+    }
+
+    /// Slim capsule: colored dot for connection state; when live data is
+    /// available it shows battery + inside temp, otherwise the state label.
+    private var statusCapsule: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(model.statusColor)
+                .frame(width: 8, height: 8)
+            Text(compactStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.thinMaterial, in: Capsule())
+    }
+
+    private var compactStatus: String {
         var parts: [String] = []
         if let battery = snapshot?.charge?.batteryLevel {
-            parts.append("Battery \(battery)%")
+            parts.append("\(battery)%")
         }
         if let celsius = snapshot?.climate?.insideTempCelsius {
             let fahrenheit = Int((celsius * 9 / 5 + 32).rounded())
-            parts.append("Inside \(fahrenheit)°F")
+            parts.append("\(fahrenheit)°F")
         }
-        return parts.isEmpty ? "—" : parts.joined(separator: " · ")
+        return parts.isEmpty ? model.statusLabel : parts.joined(separator: " · ")
     }
 
     // MARK: - Media section

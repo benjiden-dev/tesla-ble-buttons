@@ -133,6 +133,19 @@ actor VehicleService {
         await teardown()
     }
 
+    /// Fetches a full state snapshot, but only when a session is already
+    /// live — returns nil otherwise so UI polls never trigger BLE scan
+    /// loops while away from the car. Refreshes the idle-teardown window
+    /// like any other traffic.
+    func fetchSnapshotIfConnected() async throws -> TeslaVehicleSnapshot? {
+        guard let existing = client else { return nil }
+        let state = await existing.state
+        guard state == .connected else { return nil }
+        let snapshot = try await existing.fetch(.all)
+        scheduleIdleTeardown()
+        return snapshot
+    }
+
     // MARK: - Internals
 
     private static let maxConnectAttempts = 2

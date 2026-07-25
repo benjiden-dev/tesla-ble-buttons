@@ -34,6 +34,10 @@ struct DashboardView: View {
     @State private var commandNotice: String?
     @State private var snapshot: TeslaVehicleSnapshot?
 
+    /// Mirrors the current geometry orientation so the floating bar (which
+    /// lives outside the GeometryReader) can adapt its layout.
+    @State private var isLandscapeLayout = false
+
     // Last-sent local state for controls the snapshot doesn't report back.
     @State private var keeperOn = false
     @State private var driverVent: TeslaCommandExecutor.VentLevel = .off
@@ -52,25 +56,30 @@ struct DashboardView: View {
         GeometryReader { geo in
             let isLandscape = geo.size.width > geo.size.height
 
-            if isLandscape {
-                // Three independently scrolling columns.
-                HStack(alignment: .top, spacing: 12) {
-                    scrollColumn { mediaSection }
-                    scrollColumn { climateSection }
-                    scrollColumn { vehicleSection }
-                }
-                .padding(.horizontal)
-            } else {
-                ScrollView {
-                    VStack(spacing: 12) {
-                        mediaSection
-                        climateSection
-                        vehicleSection
+            Group {
+                if isLandscape {
+                    // Two independently scrolling columns — media lives in
+                    // the top bar in landscape.
+                    HStack(alignment: .top, spacing: 12) {
+                        scrollColumn { climateSection }
+                        scrollColumn { vehicleSection }
                     }
                     .padding(.horizontal)
-                    .padding(.bottom)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            mediaSection
+                            climateSection
+                            vehicleSection
+                        }
+                        .padding(.horizontal)
+                        .padding(.bottom)
+                    }
+                    .contentMargins(.top, 56, for: .scrollContent)
                 }
-                .contentMargins(.top, 52, for: .scrollContent)
+            }
+            .onChange(of: geo.size, initial: true) { _, size in
+                isLandscapeLayout = size.width > size.height
             }
         }
         // No navigation bar on the dashboard — discrete floating controls
@@ -115,7 +124,11 @@ struct DashboardView: View {
 
             statusCapsule
 
-            Spacer()
+            if isLandscapeLayout {
+                mediaStrip
+            } else {
+                Spacer()
+            }
 
             Button {
                 isEditing = true
@@ -216,6 +229,7 @@ struct DashboardView: View {
         _ symbol: String,
         id: String,
         title: String,
+        compact: Bool = false,
         action: @escaping @Sendable (TeslaCommandExecutor) async throws -> CommandOutcome,
     ) -> some View {
         Button {
@@ -229,10 +243,72 @@ struct DashboardView: View {
                         .controlSize(.mini)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 32)
+            .frame(
+                minWidth: compact ? 30 : nil,
+                maxWidth: compact ? nil : .infinity,
+                minHeight: compact ? 26 : 32,
+            )
         }
         .buttonStyle(.bordered)
+        .controlSize(compact ? .small : .regular)
         .disabled(runningID != nil || snapshot?.media?.remoteControlEnabled == false)
+    }
+
+    /// Compact now-playing strip for the landscape top bar: title · artist,
+    /// a thin progress bar (updates with the 8s poll), and small transport
+    /// controls — all in one pill that fills the bar's unused middle.
+    private var mediaStrip: some View {
+        HStack(spacing: 10) {
+            mediaStripTitle
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let progress = trackProgress {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .frame(minWidth: 50, maxWidth: 140)
+            }
+
+            HStack(spacing: 6) {
+                mediaButton("backward.fill", id: "media.previous", title: "Previous", compact: true) {
+                    try await $0.mediaPrevious()
+                }
+                mediaButton("playpause.fill", id: "media.playPause", title: "Play / Pause", compact: true) {
+                    try await $0.mediaPlayPause()
+                }
+                mediaButton("forward.fill", id: "media.next", title: "Next", compact: true) {
+                    try await $0.mediaNext()
+                }
+            }
+            .layoutPriority(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(.thinMaterial, in: Capsule())
+    }
+
+    private var mediaStripTitle: Text {
+        let title = snapshot?.media?.nowPlayingTitle ?? "Nothing playing"
+        var text = Text(title)
+            .font(.footnote.weight(.medium))
+        if let artist = snapshot?.media?.nowPlayingArtist, !artist.isEmpty {
+            text = text + Text(" · \(artist)")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        return text
+    }
+
+    /// 0...1 progress of the current track; nil when the car doesn't report
+    /// timing. Advances in steps with the snapshot poll cadence.
+    private var trackProgress: Double? {
+        guard
+            let duration = snapshot?.mediaDetail?.nowPlayingDurationSeconds,
+            duration > 0,
+            let elapsed = snapshot?.mediaDetail?.nowPlayingElapsedSeconds
+        else { return nil }
+        return min(max(elapsed / duration, 0), 1)
     }
 
     // MARK: - Climate section
@@ -368,7 +444,7 @@ struct DashboardView: View {
             content()
                 .padding(.bottom)
         }
-        .contentMargins(.top, 52, for: .scrollContent)
+        .contentMargins(.top, 56, for: .scrollContent)
     }
 
     /// Floating bottom banner: red for real failures, quiet secondary for

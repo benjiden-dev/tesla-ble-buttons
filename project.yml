@@ -55,6 +55,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.benjiden.teslabuttons
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_UIUserInterfaceStyle: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
   TeslaButtonsControls:
     type: app-extension

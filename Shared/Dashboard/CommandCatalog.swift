@@ -12,6 +12,7 @@
 //
 
 import Foundation
+import TeslaBLE
 
 enum ConfirmationRequirement: Sendable {
     case none
@@ -42,6 +43,12 @@ struct CatalogCommand: Identifiable, Sendable {
     /// stateless executor, so this is safe by construction. Returns the
     /// outcome so the UI can distinguish "done" from "was already set".
     let action: @Sendable (TeslaCommandExecutor) async throws -> CommandOutcome
+
+    /// Optional state-driven presentation for toggle tiles: given the latest
+    /// snapshot (or nil), returns the title/symbol showing the NEXT action —
+    /// e.g. "Close Charge Port" while the port is open. Static `title` /
+    /// `systemImage` are used when nil (and in the Edit/Add lists).
+    var presentation: (@Sendable (TeslaVehicleSnapshot?) -> (title: String, systemImage: String))? = nil
 }
 
 /// Do NOT add security(.addKey), security(.removeKey), or
@@ -121,21 +128,19 @@ enum CommandCatalog {
         ),
 
         // MARK: Vehicle
+        // State-aware toggle: label always shows the NEXT action.
         CatalogCommand(
-            id: "charge.port.open",
-            title: "Open Charge Port",
+            id: "charge.port.toggle",
+            title: "Charge Port",
             systemImage: "bolt.fill",
             section: .vehicle,
             confirmation: .none,
-            action: { try await $0.openChargePort() },
-        ),
-        CatalogCommand(
-            id: "charge.port.close",
-            title: "Close Charge Port",
-            systemImage: "bolt.slash.fill",
-            section: .vehicle,
-            confirmation: .none,
-            action: { try await $0.closeChargePort() },
+            action: { try await $0.toggleChargePort() },
+            presentation: { snap in
+                snap?.charge?.chargePortOpen == true
+                    ? (title: "Close Charge Port", systemImage: "bolt.slash.fill")
+                    : (title: "Open Charge Port", systemImage: "bolt.fill")
+            },
         ),
         CatalogCommand(
             id: "trunk.actuate",
@@ -153,37 +158,33 @@ enum CommandCatalog {
             confirmation: .confirm,
             action: { try await $0.actuateFrunk() },
         ),
+        // State-aware toggle: label always shows the NEXT action.
         CatalogCommand(
-            id: "security.lock",
-            title: "Lock",
+            id: "security.lockToggle",
+            title: "Lock / Unlock",
             systemImage: "lock.fill",
             section: .vehicle,
             confirmation: .none,
-            action: { try await $0.lock() },
+            action: { try await $0.toggleLock() },
+            presentation: { snap in
+                snap?.closures?.locked == true
+                    ? (title: "Unlock", systemImage: "lock.open.fill")
+                    : (title: "Lock", systemImage: "lock.fill")
+            },
         ),
+        // State-aware toggle: label always shows the NEXT action.
         CatalogCommand(
-            id: "security.unlock",
-            title: "Unlock",
-            systemImage: "lock.open.fill",
-            section: .vehicle,
-            confirmation: .none,
-            action: { try await $0.unlock() },
-        ),
-        CatalogCommand(
-            id: "windows.vent",
-            title: "Vent Windows",
+            id: "windows.toggle",
+            title: "Windows",
             systemImage: "wind",
             section: .vehicle,
             confirmation: .none,
-            action: { try await $0.ventWindows() },
-        ),
-        CatalogCommand(
-            id: "windows.close",
-            title: "Close Windows",
-            systemImage: "arrow.down.circle",
-            section: .vehicle,
-            confirmation: .none,
-            action: { try await $0.closeWindows() },
+            action: { try await $0.toggleWindows() },
+            presentation: { snap in
+                TeslaCommandExecutor.anyWindowOpen(snap)
+                    ? (title: "Close Windows", systemImage: "arrow.down.circle")
+                    : (title: "Vent Windows", systemImage: "wind")
+            },
         ),
         // Toggles based on the car-reported state.
         CatalogCommand(

@@ -75,6 +75,26 @@ struct TeslaCommandExecutor {
         await VehicleService.shared.cachedSnapshot()
     }
 
+    /// State for toggle commands, which MUST know the current value to pick
+    /// a direction: cache first, otherwise connect and fetch live.
+    private func freshState() async throws -> TeslaVehicleSnapshot? {
+        if let snap = await cached() {
+            return snap
+        }
+        try await VehicleService.shared.connectNow()
+        return try await snapshotIfConnected()
+    }
+
+    /// True when any of the four windows is reported open. Also used by the
+    /// dashboard to label the windows toggle tile.
+    static func anyWindowOpen(_ snap: TeslaVehicleSnapshot?) -> Bool {
+        guard let closures = snap?.closures else { return false }
+        return closures.windowDriverFront == true
+            || closures.windowPassengerFront == true
+            || closures.windowDriverRear == true
+            || closures.windowPassengerRear == true
+    }
+
     // MARK: - Climate
 
     @discardableResult
@@ -202,6 +222,14 @@ struct TeslaCommandExecutor {
         return try await VehicleService.shared.run(.charge(.closePort))
     }
 
+    /// Opens the port when closed, closes it when open (state-aware toggle;
+    /// defaults to opening when state is unavailable).
+    @discardableResult
+    func toggleChargePort() async throws -> CommandOutcome {
+        let isOpen = (try await freshState())?.charge?.chargePortOpen ?? false
+        return try await VehicleService.shared.run(.charge(isOpen ? .closePort : .openPort))
+    }
+
     /// Charge limit as a percentage (e.g. 80 for daily, 100 for trips).
     @discardableResult
     func setChargeLimit(percent: Int) async throws -> CommandOutcome {
@@ -227,6 +255,22 @@ struct TeslaCommandExecutor {
             return .alreadySatisfied(reason: "already unlocked")
         }
         return try await VehicleService.shared.run(.security(.unlock))
+    }
+
+    /// Locks when unlocked, unlocks when locked (state-aware toggle;
+    /// defaults to locking — the safety-positive direction — when unknown).
+    @discardableResult
+    func toggleLock() async throws -> CommandOutcome {
+        let locked = (try await freshState())?.closures?.locked ?? false
+        return try await VehicleService.shared.run(.security(locked ? .unlock : .lock))
+    }
+
+    /// Vents when all windows are closed, closes when any is open
+    /// (state-aware toggle; defaults to venting when unknown).
+    @discardableResult
+    func toggleWindows() async throws -> CommandOutcome {
+        let anyOpen = Self.anyWindowOpen(try await freshState())
+        return try await VehicleService.shared.run(.actions(anyOpen ? .closeWindows : .ventWindows))
     }
 
     @discardableResult

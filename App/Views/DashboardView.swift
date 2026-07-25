@@ -500,8 +500,11 @@ struct DashboardView: View {
             spacing: 10,
         ) {
             ForEach(commands) { command in
+                let display = command.presentation?(snapshot)
+                    ?? (title: command.title, systemImage: command.systemImage)
                 CommandTileView(
-                    command: command,
+                    title: display.title,
+                    systemImage: display.systemImage,
                     isRunning: runningID == command.id,
                 ) {
                     handleTap(on: command)
@@ -547,6 +550,12 @@ struct DashboardView: View {
                 let outcome = try await action()
                 if case .alreadySatisfied(let reason) = outcome {
                     showNotice("\(title): \(Self.prettyReason(reason))")
+                }
+                // Refresh shortly after so toggle tiles flip their label to
+                // the next action without waiting for the regular poll.
+                Task {
+                    try? await Task.sleep(for: .seconds(1.2))
+                    await refreshSnapshot()
                 }
             } catch {
                 commandError = "\(title): \(Self.message(for: error))"
@@ -609,7 +618,8 @@ struct DashboardView: View {
 }
 
 private struct CommandTileView: View {
-    let command: CatalogCommand
+    let title: String
+    let systemImage: String
     let isRunning: Bool
     let action: () -> Void
 
@@ -617,14 +627,14 @@ private struct CommandTileView: View {
         Button(action: action) {
             VStack(spacing: 6) {
                 ZStack {
-                    Image(systemName: command.systemImage)
+                    Image(systemName: systemImage)
                         .font(.title2)
                         .opacity(isRunning ? 0 : 1)
                     if isRunning {
                         ProgressView()
                     }
                 }
-                Text(command.title)
+                Text(title)
                     .font(.caption)
                     .multilineTextAlignment(.center)
             }

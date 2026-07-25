@@ -72,6 +72,9 @@ struct DashboardView: View {
     /// (local state read only — zero BLE traffic).
     private static let pausedProbeSeconds = 10
 
+    /// Height reserved at the bottom for the TabView page indicator.
+    private static let pageDotsInset: CGFloat = 24
+
     init(isActive: Bool = true, executor: TeslaCommandExecutor = TeslaCommandExecutor()) {
         self.isActive = isActive
         self.executor = executor
@@ -100,7 +103,7 @@ struct DashboardView: View {
                             vehicleSection
                         }
                         .padding(.horizontal, 12)
-                        .padding(.bottom, 24)
+                        .padding(.bottom, 8)
                     }
                 }
             }
@@ -114,6 +117,11 @@ struct DashboardView: View {
         // safeAreaInset (not overlay): the bar is its own band and content
         // stops above it rather than sliding underneath.
         .safeAreaInset(edge: .top, spacing: 0) { topBar }
+        // Reserve a band for the TabView page dots so scrolling cards end
+        // above them instead of passing behind.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: Self.pageDotsInset)
+        }
         .sheet(isPresented: $isEditing) {
             EditDashboardView(store: store)
         }
@@ -589,13 +597,14 @@ struct DashboardView: View {
 
     /// One independently scrolling landscape column. Content starts below
     /// the floating chrome but scrolls underneath it.
-    /// One independently scrolling landscape column. Bottom inset clears
-    /// the TabView page dots.
+    /// One independently scrolling landscape column. The page-dots band is
+    /// reserved via safeAreaInset on the whole view, so this only needs
+    /// breathing room.
     private func scrollColumn(@ViewBuilder content: () -> some View) -> some View {
         ScrollView(showsIndicators: false) {
             content()
                 .padding(.top, 10)
-                .padding(.bottom, 28)
+                .padding(.bottom, 8)
         }
     }
 

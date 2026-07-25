@@ -55,6 +55,10 @@ struct StatsView: View {
             .padding(.vertical, 6)
             .background(.bar)
         }
+        // Match the dashboard's reserved band for the page dots.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: 24)
+        }
         .task(id: isActive) {
             guard isActive else { return }
             await pollSnapshot()

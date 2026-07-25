@@ -22,7 +22,7 @@ struct RootView: View {
                     StatsView(isActive: page == 1)
                         .tag(1)
                 }
-                .tabViewStyle(.page(indexDisplayMode: .automatic))
+                .tabViewStyle(.page(indexDisplayMode: .always))
                 .toolbar(.hidden, for: .navigationBar)
             }
         }

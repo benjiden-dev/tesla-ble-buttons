@@ -51,38 +51,32 @@ struct DashboardView: View {
         GeometryReader { geo in
             let isLandscape = geo.size.width > geo.size.height
 
-            ScrollView {
-                VStack(spacing: 10) {
-                    if let commandError {
-                        Text(commandError)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    if isLandscape {
-                        HStack(alignment: .top, spacing: 12) {
-                            mediaSection
-                            climateSection
-                            vehicleSection
-                        }
-                    } else {
-                        VStack(spacing: 12) {
-                            mediaSection
-                            climateSection
-                            vehicleSection
-                        }
-                    }
+            if isLandscape {
+                // Three independently scrolling columns.
+                HStack(alignment: .top, spacing: 12) {
+                    scrollColumn { mediaSection }
+                    scrollColumn { climateSection }
+                    scrollColumn { vehicleSection }
                 }
                 .padding(.horizontal)
-                .padding(.bottom)
+            } else {
+                ScrollView {
+                    VStack(spacing: 12) {
+                        mediaSection
+                        climateSection
+                        vehicleSection
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom)
+                }
+                .contentMargins(.top, 52, for: .scrollContent)
             }
-            .contentMargins(.top, 52, for: .scrollContent)
         }
         // No navigation bar on the dashboard — discrete floating controls
         // instead (the pushed Settings screen shows its own bar + back).
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .top) { floatingBar }
+        .overlay(alignment: .bottom) { errorBanner }
         .sheet(isPresented: $isEditing) {
             EditDashboardView(store: store)
         }
@@ -365,6 +359,34 @@ struct DashboardView: View {
     }
 
     // MARK: - Shared pieces
+
+    /// One independently scrolling landscape column. Content starts below
+    /// the floating chrome but scrolls underneath it.
+    private func scrollColumn(@ViewBuilder content: () -> some View) -> some View {
+        ScrollView(showsIndicators: false) {
+            content()
+                .padding(.bottom)
+        }
+        .contentMargins(.top, 52, for: .scrollContent)
+    }
+
+    /// Floating bottom banner for command failures; tap to dismiss. Lives
+    /// outside the scroll views so it's visible in both orientations.
+    @ViewBuilder
+    private var errorBanner: some View {
+        if let commandError {
+            Text(commandError)
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .lineLimit(2)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+                .onTapGesture { self.commandError = nil }
+        }
+    }
 
     private func sectionCard(
         _ title: String,

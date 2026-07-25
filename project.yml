@@ -16,7 +16,7 @@ settings:
     SWIFT_VERSION: "6.0"
     # Set your Apple Developer Team ID here (Xcode > Settings > Accounts),
     # or leave blank and pick the team in Signing & Capabilities after generating.
-    DEVELOPMENT_TEAM: ""
+    DEVELOPMENT_TEAM: 48X9Q39ND5
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: false
 

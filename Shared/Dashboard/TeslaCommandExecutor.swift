@@ -150,7 +150,10 @@ struct TeslaCommandExecutor {
     /// Falls back to Low when no live state is available yet.
     @discardableResult
     func cycleSeatHeater(seat: FrontSeat) async throws -> CommandOutcome {
-        let snap = await cached() ?? (try await snapshotIfConnected())
+        var snap = await cached()
+        if snap == nil {
+            snap = try await snapshotIfConnected()
+        }
         let reported = seat == .driver
             ? snap?.climate?.seatHeaterFrontLeft
             : snap?.climate?.seatHeaterFrontRight
@@ -173,7 +176,10 @@ struct TeslaCommandExecutor {
     /// (defaults to turning it on when no state is available).
     @discardableResult
     func toggleSteeringWheelHeater() async throws -> CommandOutcome {
-        let snap = await cached() ?? (try await snapshotIfConnected())
+        var snap = await cached()
+        if snap == nil {
+            snap = try await snapshotIfConnected()
+        }
         let currentlyOn = snap?.climate?.steeringWheelHeater ?? false
         return try await VehicleService.shared.run(.climate(.setSteeringWheelHeater(!currentlyOn)))
     }
@@ -232,7 +238,10 @@ struct TeslaCommandExecutor {
     /// reports sentryModeActive; defaults to enabling when unknown).
     @discardableResult
     func toggleSentry() async throws -> CommandOutcome {
-        let snap = await cached() ?? (try await snapshotIfConnected())
+        var snap = await cached()
+        if snap == nil {
+            snap = try await snapshotIfConnected()
+        }
         let currentlyOn = snap?.closures?.sentryModeActive ?? false
         return try await VehicleService.shared.run(.security(.setSentryMode(!currentlyOn)))
     }

@@ -68,19 +68,28 @@ private struct AddCommandView: View {
 
     var body: some View {
         NavigationStack {
-            List(store.availableToAdd) { command in
-                Button {
-                    store.add(commandID: command.id)
-                    dismiss()
-                } label: {
-                    HStack {
-                        Image(systemName: command.systemImage)
-                        Text(command.title)
-                        if command.confirmation == .confirm {
-                            Spacer()
-                            Text("Confirm")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+            List {
+                ForEach(DashboardSection.allCases, id: \.self) { section in
+                    let commands = store.availableToAdd.filter { $0.section == section }
+                    if !commands.isEmpty {
+                        Section(section.title) {
+                            ForEach(commands) { command in
+                                Button {
+                                    store.add(commandID: command.id)
+                                    dismiss()
+                                } label: {
+                                    HStack {
+                                        Image(systemName: command.systemImage)
+                                        Text(command.title)
+                                        if command.confirmation == .confirm {
+                                            Spacer()
+                                            Text("Confirm")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

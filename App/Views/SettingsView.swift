@@ -17,8 +17,10 @@ struct SettingsView: View {
                 LabeledContent("Connection", value: model.statusLabel)
             }
 
-            Section("Climate") {
+            Section {
                 Stepper("Default temperature: \(defaultTempF)°F", value: $defaultTempF, in: 59 ... 83)
+            } header: {
+                Text("Climate")
             } footer: {
                 Text("Used by the in-app Set & Start button and the Control Center Climate control.")
             }

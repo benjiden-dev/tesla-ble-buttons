@@ -45,6 +45,17 @@ struct TeslaCommandExecutor {
             case .high: "3"
             }
         }
+
+        /// Cycle order for the dashboard's one-button control:
+        /// Off → 1 → 2 → 3 → Off.
+        var next: VentLevel {
+            switch self {
+            case .off: .low
+            case .low: .medium
+            case .medium: .high
+            case .high: .off
+            }
+        }
     }
 
     enum FrontSeat: String, Sendable {

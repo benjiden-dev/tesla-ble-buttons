@@ -5,16 +5,17 @@
 //  Landscape-first sectioned dashboard for the in-car mount:
 //
 //  ┌─ Media ────────┬─ Climate ─────────┬─ Vehicle ──────┐
-//  │ Now playing    │ Keeper mode       │ catalog tiles  │
-//  │ slim controls  │ seat vents        │ (charge port,  │
+//  │ Now playing    │ keeper toggle +   │ catalog tiles  │
+//  │ slim controls  │ vent cycle btns   │ (charge port,  │
 //  │                │ climate tiles     │  trunk, frunk) │
 //  └────────────────┴───────────────────┴────────────────┘
 //
 //  Landscape: three columns. Portrait: the same sections stacked.
 //
 //  Keeper mode and seat-vent levels are NOT reported back by the vehicle
-//  snapshot, so those pickers reflect the last value sent from this app,
-//  not necessarily car truth (e.g. changes made on the touchscreen).
+//  snapshot, so those buttons reflect the last value sent from this app
+//  (they revert if the send fails), not necessarily car truth — e.g.
+//  changes made on the touchscreen won't show here.
 //
 //  Note: RootView provides the NavigationStack — don't nest one.
 //
@@ -33,7 +34,7 @@ struct DashboardView: View {
     @State private var snapshot: TeslaVehicleSnapshot?
 
     // Last-sent local state for controls the snapshot doesn't report back.
-    @State private var keeperMode: TeslaCommandExecutor.KeeperMode = .off
+    @State private var keeperOn = false
     @State private var driverVent: TeslaCommandExecutor.VentLevel = .off
     @State private var passengerVent: TeslaCommandExecutor.VentLevel = .off
 
@@ -179,8 +180,9 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Slim transport row: three equal-width buttons, no volume controls.
     private var mediaControls: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             mediaButton("backward.fill", id: "media.previous", title: "Previous") {
                 try await $0.mediaPrevious()
             }
@@ -189,20 +191,6 @@ struct DashboardView: View {
             }
             mediaButton("forward.fill", id: "media.next", title: "Next") {
                 try await $0.mediaNext()
-            }
-            Divider()
-                .frame(height: 20)
-            mediaButton("speaker.wave.1", id: "media.volumeDown", title: "Volume Down") {
-                try await $0.volumeDown()
-            }
-            mediaButton("speaker.wave.3", id: "media.volumeUp", title: "Volume Up") {
-                try await $0.volumeUp()
-            }
-            Spacer(minLength: 0)
-            if let volume = snapshot?.media?.audioVolume {
-                Text(String(format: "%.1f", volume))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -224,7 +212,7 @@ struct DashboardView: View {
                         .controlSize(.mini)
                 }
             }
-            .frame(minWidth: 36, minHeight: 30)
+            .frame(maxWidth: .infinity, minHeight: 32)
         }
         .buttonStyle(.bordered)
         .disabled(runningID != nil || snapshot?.media?.remoteControlEnabled == false)
@@ -235,47 +223,115 @@ struct DashboardView: View {
     private var climateSection: some View {
         sectionCard("Climate", systemImage: "fanblades.fill") {
             VStack(alignment: .leading, spacing: 12) {
-                labeledPicker("Climate Keeper", selection: $keeperMode) { mode in
-                    runRaw(id: "climate.keeper", title: "Climate Keeper") {
-                        try await executor.setKeeperMode(mode)
-                    }
-                }
-                labeledPicker("Driver Vent", selection: $driverVent) { level in
-                    runRaw(id: "climate.vent.driver", title: "Driver Vent") {
-                        try await executor.setSeatCooler(level: level, seat: .driver)
-                    }
-                }
-                labeledPicker("Passenger Vent", selection: $passengerVent) { level in
-                    runRaw(id: "climate.vent.passenger", title: "Passenger Vent") {
-                        try await executor.setSeatCooler(level: level, seat: .passenger)
-                    }
+                HStack(spacing: 8) {
+                    keeperButton
+                    ventButton(
+                        "Driver",
+                        symbolBase: "carseat.left.fan",
+                        seat: .driver,
+                        level: $driverVent,
+                    )
+                    ventButton(
+                        "Passenger",
+                        symbolBase: "carseat.right.fan",
+                        seat: .passenger,
+                        level: $passengerVent,
+                    )
                 }
                 tileGrid(for: .climate)
             }
         }
     }
 
-    /// Segmented picker with a caption label. Fires `onSelect` when the user
-    /// picks a new value.
-    private func labeledPicker<Value: Hashable & CaseIterable & PickerLabeled>(
-        _ label: String,
-        selection: Binding<Value>,
-        onSelect: @escaping (Value) -> Void,
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Picker(label, selection: selection) {
-                ForEach(Array(Value.allCases), id: \.self) { value in
-                    Text(value.label).tag(value)
-                }
+    /// Two-state Climate Keeper toggle (Off / Keep). Dog and Camp modes are
+    /// intentionally not exposed here.
+    private var keeperButton: some View {
+        let core = Button {
+            guard runningID == nil else { return }
+            let previous = keeperOn
+            keeperOn.toggle()
+            let target: TeslaCommandExecutor.KeeperMode = keeperOn ? .on : .off
+            runRaw(
+                id: "climate.keeper",
+                title: "Climate Keeper",
+                onFailure: { keeperOn = previous },
+            ) {
+                try await executor.setKeeperMode(target)
             }
-            .pickerStyle(.segmented)
-            .onChange(of: selection.wrappedValue) { _, newValue in
-                onSelect(newValue)
+        } label: {
+            stateButtonLabel(
+                symbol: keeperOn ? "infinity.circle.fill" : "infinity.circle",
+                text: keeperOn ? "Keeper On" : "Keeper Off",
+                busy: runningID == "climate.keeper",
+            )
+        }
+
+        return Group {
+            if keeperOn {
+                core.buttonStyle(.borderedProminent).tint(.green)
+            } else {
+                core.buttonStyle(.bordered)
             }
         }
+    }
+
+    /// One-button seat-vent control: tap cycles Off → 1 → 2 → 3 → Off, and
+    /// the button's prominence/fill reflects the current (last-sent) level.
+    private func ventButton(
+        _ title: String,
+        symbolBase: String,
+        seat: TeslaCommandExecutor.FrontSeat,
+        level: Binding<TeslaCommandExecutor.VentLevel>,
+    ) -> some View {
+        let current = level.wrappedValue
+        let id = "climate.vent.\(seat.rawValue)"
+
+        let core = Button {
+            guard runningID == nil else { return }
+            let previous = current
+            let target = current.next
+            level.wrappedValue = target
+            runRaw(
+                id: id,
+                title: "\(title) Vent",
+                onFailure: { level.wrappedValue = previous },
+            ) {
+                try await executor.setSeatCooler(level: target, seat: seat)
+            }
+        } label: {
+            stateButtonLabel(
+                symbol: current == .off ? symbolBase : "\(symbolBase).fill",
+                text: current == .off ? title : "\(title) · \(current.label)",
+                busy: runningID == id,
+            )
+        }
+
+        return Group {
+            if current == .off {
+                core.buttonStyle(.bordered)
+            } else {
+                core.buttonStyle(.borderedProminent).tint(.cyan)
+            }
+        }
+    }
+
+    private func stateButtonLabel(symbol: String, text: String, busy: Bool) -> some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Image(systemName: symbol)
+                    .font(.title3)
+                    .opacity(busy ? 0 : 1)
+                if busy {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+            }
+            Text(text)
+                .font(.caption2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, minHeight: 52)
     }
 
     // MARK: - Vehicle section
@@ -344,9 +400,12 @@ struct DashboardView: View {
 
     /// Single-flight command runner: one command at a time, busy spinner on
     /// the triggering control, failures surfaced in the error line.
+    /// `onFailure` lets stateful controls (keeper, vents) revert their
+    /// last-sent appearance when the send fails.
     private func runRaw(
         id: String,
         title: String,
+        onFailure: (() -> Void)? = nil,
         _ action: @escaping @Sendable () async throws -> Void,
     ) {
         guard runningID == nil else { return }
@@ -357,6 +416,7 @@ struct DashboardView: View {
                 try await action()
             } catch {
                 commandError = "\(title): \(Self.message(for: error))"
+                onFailure?()
             }
             runningID = nil
         }
@@ -390,14 +450,6 @@ struct DashboardView: View {
         return String(describing: error)
     }
 }
-
-/// Types usable in the dashboard's segmented pickers.
-protocol PickerLabeled {
-    var label: String { get }
-}
-
-extension TeslaCommandExecutor.KeeperMode: PickerLabeled {}
-extension TeslaCommandExecutor.VentLevel: PickerLabeled {}
 
 private struct CommandTileView: View {
     let command: CatalogCommand

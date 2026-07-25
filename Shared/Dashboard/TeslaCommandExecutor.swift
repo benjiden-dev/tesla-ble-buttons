@@ -120,6 +120,37 @@ struct TeslaCommandExecutor {
         )
     }
 
+    /// Cycles the seat heater Off → 1 → 2 → 3 → Off using the car-reported
+    /// current level (the snapshot DOES report seat heaters, unlike vents).
+    /// Falls back to Low when no live state is available yet.
+    func cycleSeatHeater(seat: FrontSeat) async throws {
+        let snap = try await snapshotIfConnected()
+        let reported = seat == .driver
+            ? snap?.climate?.seatHeaterFrontLeft
+            : snap?.climate?.seatHeaterFrontRight
+        let nextRaw = ((reported?.rawValue ?? 0) + 1) % 4
+        let wireLevel: Command.Climate.SeatHeaterLevel =
+            switch nextRaw {
+            case 1: .low
+            case 2: .medium
+            case 3: .high
+            default: .off
+            }
+        let wireSeat: Command.Climate.SeatPosition =
+            seat == .driver ? .frontLeft : .frontRight
+        try await VehicleService.shared.run(
+            .climate(.setSeatHeater(level: wireLevel, seat: wireSeat)),
+        )
+    }
+
+    /// Flips the steering wheel heater based on car-reported state
+    /// (defaults to turning it on when no state is available).
+    func toggleSteeringWheelHeater() async throws {
+        let snap = try await snapshotIfConnected()
+        let currentlyOn = snap?.climate?.steeringWheelHeater ?? false
+        try await VehicleService.shared.run(.climate(.setSteeringWheelHeater(!currentlyOn)))
+    }
+
     // MARK: - Charge
 
     func openChargePort() async throws {
@@ -130,7 +161,32 @@ struct TeslaCommandExecutor {
         try await VehicleService.shared.run(.charge(.closePort))
     }
 
-    // MARK: - Closures
+    /// Charge limit as a percentage (e.g. 80 for daily, 100 for trips).
+    func setChargeLimit(percent: Int) async throws {
+        try await VehicleService.shared.run(.charge(.setLimit(percent: Int32(percent))))
+    }
+
+    // MARK: - Security & closures
+
+    func lock() async throws {
+        try await VehicleService.shared.run(.security(.lock))
+    }
+
+    func unlock() async throws {
+        try await VehicleService.shared.run(.security(.unlock))
+    }
+
+    func wake() async throws {
+        try await VehicleService.shared.run(.security(.wakeVehicle))
+    }
+
+    /// Flips Sentry Mode based on car-reported state (closures snapshot
+    /// reports sentryModeActive; defaults to enabling when unknown).
+    func toggleSentry() async throws {
+        let snap = try await snapshotIfConnected()
+        let currentlyOn = snap?.closures?.sentryModeActive ?? false
+        try await VehicleService.shared.run(.security(.setSentryMode(!currentlyOn)))
+    }
 
     /// Opens or closes the powered trunk (toggle).
     func actuateTrunk() async throws {
@@ -140,6 +196,24 @@ struct TeslaCommandExecutor {
     /// Frunk is open-only on the wire; there is no close/actuate case.
     func actuateFrunk() async throws {
         try await VehicleService.shared.run(.security(.openFrunk))
+    }
+
+    // MARK: - Actions
+
+    func ventWindows() async throws {
+        try await VehicleService.shared.run(.actions(.ventWindows))
+    }
+
+    func closeWindows() async throws {
+        try await VehicleService.shared.run(.actions(.closeWindows))
+    }
+
+    func flashLights() async throws {
+        try await VehicleService.shared.run(.actions(.flashLights))
+    }
+
+    func honk() async throws {
+        try await VehicleService.shared.run(.actions(.honk))
     }
 
     // MARK: - Media

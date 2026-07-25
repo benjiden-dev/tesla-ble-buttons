@@ -9,17 +9,20 @@
 
 import Foundation
 
-enum ConfirmationRequirement {
+enum ConfirmationRequirement: Sendable {
     case none
     case confirm
 }
 
-struct CatalogCommand: Identifiable {
+struct CatalogCommand: Identifiable, Sendable {
     let id: String
     let title: String
     let systemImage: String
     let confirmation: ConfirmationRequirement
-    let action: (TeslaCommandExecutor) async throws -> Void
+    /// @Sendable so `CatalogCommand` (and the global `CommandCatalog.all`)
+    /// satisfies Swift 6 strict concurrency — the closures only touch the
+    /// stateless executor, so this is safe by construction.
+    let action: @Sendable (TeslaCommandExecutor) async throws -> Void
 }
 
 /// Do NOT add security(.addKey), security(.removeKey), or

@@ -38,8 +38,16 @@ struct DashboardView: View {
     /// lives outside the GeometryReader) can adapt its layout.
     @State private var isLandscapeLayout = false
 
-    /// Retry closure for the last failed command, surfaced in the banner.
+    /// Retry closure for the last failed command, surfaced in the chip.
     @State private var lastFailedAction: (() -> Void)?
+
+    /// Set after a connection failure. While true, taps are ignored so
+    /// mashing dead buttons can't stack up 30-second scan attempts; the user
+    /// can still force an immediate retry by tapping the status chip.
+    @State private var isCoolingDown = false
+
+    /// Seconds of enforced quiet after a connection-class failure.
+    private static let failureCooldownSeconds: TimeInterval = 6
 
     // Custom climate popover
     @State private var showTempPopover = false
@@ -103,7 +111,6 @@ struct DashboardView: View {
         // instead (the pushed Settings screen shows its own bar + back).
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .top) { floatingBar }
-        .overlay(alignment: .bottom) { errorBanner }
         .sheet(isPresented: $isEditing) {
             EditDashboardView(store: store)
         }
@@ -176,22 +183,55 @@ struct DashboardView: View {
             .background(.thinMaterial, in: Circle())
     }
 
-    /// Slim capsule: colored dot for connection state; when live data is
-    /// available it shows battery + inside temp, otherwise the state label.
+    /// The chip is the single status surface: normally a colored dot plus
+    /// battery/inside temp, but it takes over as the error/notice display —
+    /// red for failures (tap to retry when retryable), secondary for
+    /// notices like "already set" or "Connecting…".
     private var statusCapsule: some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(model.statusColor)
-                .frame(width: 8, height: 8)
-            Text(compactStatus)
+            if commandError != nil {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            } else {
+                Circle()
+                    .fill(model.statusColor)
+                    .frame(width: 8, height: 8)
+            }
+
+            Text(commandError ?? commandNotice ?? compactStatus)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(commandError != nil ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
                 .monospacedDigit()
-                .lineLimit(1)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if commandError != nil, lastFailedAction != nil {
+                Image(systemName: isCoolingDown ? "arrow.clockwise.circle" : "arrow.clockwise")
+                    .font(.caption2)
+                    .foregroundStyle(.tint)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
+        .frame(maxWidth: commandError != nil || commandNotice != nil ? 280 : nil, alignment: .leading)
         .background(.thinMaterial, in: Capsule())
+        .contentShape(Capsule())
+        .onTapGesture {
+            if let retry = lastFailedAction {
+                // The chip is the deliberate escape hatch: it clears the
+                // cooldown so an intentional retry isn't blocked by the
+                // anti-spam guard that dead button taps hit.
+                commandError = nil
+                lastFailedAction = nil
+                isCoolingDown = false
+                retry()
+            } else {
+                commandError = nil
+                commandNotice = nil
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: commandError)
     }
 
     private var compactStatus: String {
@@ -279,7 +319,7 @@ struct DashboardView: View {
         }
         .buttonStyle(.bordered)
         .controlSize(compact ? .small : .regular)
-        .disabled(runningID != nil || snapshot?.media?.remoteControlEnabled == false)
+        .disabled(controlsDisabled || snapshot?.media?.remoteControlEnabled == false)
     }
 
     /// Compact now-playing strip for the landscape top bar: title · artist,
@@ -393,7 +433,7 @@ struct DashboardView: View {
             .frame(maxWidth: .infinity, minHeight: 34)
         }
         .buttonStyle(.bordered)
-        .disabled(runningID != nil)
+        .disabled(controlsDisabled)
         .popover(isPresented: $showTempPopover, arrowEdge: .bottom) {
             tempPopover
         }
@@ -448,7 +488,7 @@ struct DashboardView: View {
     /// intentionally not exposed here.
     private var keeperButton: some View {
         let core = Button {
-            guard runningID == nil else { return }
+            guard !controlsDisabled else { return }
             let previous = keeperOn
             keeperOn.toggle()
             let target: TeslaCommandExecutor.KeeperMode = keeperOn ? .on : .off
@@ -488,7 +528,7 @@ struct DashboardView: View {
         let id = "climate.vent.\(seat.rawValue)"
 
         let core = Button {
-            guard runningID == nil else { return }
+            guard !controlsDisabled else { return }
             let previous = current
             let target = current.next
             level.wrappedValue = target
@@ -555,47 +595,6 @@ struct DashboardView: View {
         .contentMargins(.top, 56, for: .scrollContent)
     }
 
-    /// Floating bottom banner: red for real failures, quiet secondary for
-    /// notices ("already set", "connecting…") which auto-dismiss. Tap to
-    /// dismiss. Connection failures offer a Retry button rather than just
-    /// stating the problem. Lives outside the scroll views so it's visible
-    /// in both orientations.
-    @ViewBuilder
-    private var errorBanner: some View {
-        if let text = commandError ?? commandNotice {
-            HStack(spacing: 10) {
-                Text(text)
-                    .font(.footnote)
-                    .foregroundStyle(
-                        commandError != nil
-                            ? AnyShapeStyle(.red)
-                            : AnyShapeStyle(.secondary),
-                    )
-                    .lineLimit(2)
-
-                if let retry = lastFailedAction {
-                    Button("Retry") {
-                        commandError = nil
-                        retry()
-                    }
-                    .font(.footnote.weight(.medium))
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal)
-            .padding(.bottom, 8)
-            .onTapGesture {
-                commandError = nil
-                commandNotice = nil
-                lastFailedAction = nil
-            }
-        }
-    }
-
     private func sectionCard(
         _ title: String,
         systemImage: String,
@@ -629,6 +628,7 @@ struct DashboardView: View {
                     title: display.title,
                     systemImage: display.systemImage,
                     isRunning: runningID == command.id,
+                    isDisabled: controlsDisabled,
                 ) {
                     handleTap(on: command)
                 }
@@ -664,11 +664,14 @@ struct DashboardView: View {
         onFailure: (() -> Void)? = nil,
         _ action: @escaping @Sendable () async throws -> CommandOutcome,
     ) {
-        guard runningID == nil else { return }
+        // Single-flight: nothing is ever queued. Taps during an in-flight
+        // command, or during the post-failure cooldown, are dropped.
+        guard runningID == nil, !isCoolingDown else { return }
         runningID = id
         commandError = nil
         commandNotice = nil
         lastFailedAction = nil
+        isCoolingDown = false
 
         // Cold start: tell the user we're bringing the link up rather than
         // leaving a silent spinner (scan + connect + handshake takes a few
@@ -704,11 +707,28 @@ struct DashboardView: View {
                     lastFailedAction = {
                         runRaw(id: id, title: title, onFailure: onFailure, action)
                     }
+                    // Connection failed — enforce a brief quiet period so
+                    // repeated taps don't pile on more failed scans.
+                    startCooldown()
                 }
                 onFailure?()
             }
             runningID = nil
         }
+    }
+
+    private func startCooldown() {
+        isCoolingDown = true
+        Task {
+            try? await Task.sleep(for: .seconds(Self.failureCooldownSeconds))
+            isCoolingDown = false
+        }
+    }
+
+    /// True when controls should refuse input: a command is in flight, or
+    /// we're cooling down after a connection failure.
+    private var controlsDisabled: Bool {
+        runningID != nil || isCoolingDown
     }
 
     private func showNotice(_ text: String) {
@@ -830,6 +850,7 @@ private struct CommandTileView: View {
     let title: String
     let systemImage: String
     let isRunning: Bool
+    let isDisabled: Bool
     let action: () -> Void
 
     var body: some View {
@@ -852,5 +873,7 @@ private struct CommandTileView: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled && !isRunning ? 0.45 : 1)
     }
 }

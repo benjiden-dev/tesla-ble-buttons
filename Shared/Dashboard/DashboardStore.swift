@@ -69,10 +69,11 @@ final class DashboardStore: ObservableObject {
         let defaultIDs = [
             "climate.preset.68",
             "climate.preset.72",
+            "climate.preset.defrost",
+            "climate.off",
             "charge.port.open",
             "trunk.actuate",
             "frunk.actuate",
-            "media.playPause",
         ]
         return defaultIDs.enumerated().map { index, id in
             DashboardTile(commandID: id, order: index)

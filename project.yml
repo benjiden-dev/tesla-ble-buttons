@@ -39,7 +39,12 @@ targets:
         CFBundleShortVersionString: "1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # Landscape-first: the app is designed for an in-car landscape mount,
+        # portrait remains supported for handheld use.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+          - UIInterfaceOrientationPortrait
         NSBluetoothAlwaysUsageDescription: >-
           Tesla Buttons connects to your vehicle over Bluetooth to send
           commands like opening the frunk and starting climate.

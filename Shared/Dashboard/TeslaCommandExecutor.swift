@@ -9,9 +9,7 @@
 //
 //  Do NOT construct a second TeslaVehicleClient here — the signed protocol
 //  keeps per-session anti-replay counters and parallel clients on the same
-//  key will fight. This also means the dashboard needs no "connect at app
-//  launch" wiring: the first command (or the snapshot poll, once connected
-//  elsewhere) brings the session up on demand.
+//  key will fight.
 //
 //  All case names below are verified against the library's Command.swift.
 //
@@ -20,8 +18,47 @@ import Foundation
 import TeslaBLE
 
 struct TeslaCommandExecutor {
+    // MARK: - App-level control enums
+    // Views use these instead of the library's nested wire enums.
+
+    enum KeeperMode: String, CaseIterable, Sendable {
+        case off, on, dog, camp
+
+        var label: String {
+            switch self {
+            case .off: "Off"
+            case .on: "Keep"
+            case .dog: "Dog"
+            case .camp: "Camp"
+            }
+        }
+    }
+
+    enum VentLevel: Int, CaseIterable, Sendable {
+        case off = 0, low, medium, high
+
+        var label: String {
+            switch self {
+            case .off: "Off"
+            case .low: "1"
+            case .medium: "2"
+            case .high: "3"
+            }
+        }
+    }
+
+    enum FrontSeat: String, Sendable {
+        case driver, passenger
+    }
+
+    // MARK: - Climate
+
     func climateOn() async throws {
         try await VehicleService.shared.run(.climate(.on))
+    }
+
+    func climateOff() async throws {
+        try await VehicleService.shared.run(.climate(.off))
     }
 
     /// Sets both front zones. The wire signature is
@@ -41,6 +78,39 @@ struct TeslaCommandExecutor {
         )
     }
 
+    /// Climate Keeper (Off / Keep / Dog / Camp). Note: the vehicle snapshot
+    /// does not report keeper state back, so callers track last-sent locally.
+    func setKeeperMode(_ mode: KeeperMode) async throws {
+        let wire: Command.Climate.ClimateKeeperMode =
+            switch mode {
+            case .off: .off
+            case .on: .on
+            case .dog: .dog
+            case .camp: .camp
+            }
+        try await VehicleService.shared.run(.climate(.setKeeperMode(wire)))
+    }
+
+    /// Seat ventilation (front seats only — the hardware has no rear vents).
+    /// Driver maps to frontLeft (LHD/US). Snapshot does not report cooler
+    /// levels back, so callers track last-sent locally.
+    func setSeatCooler(level: VentLevel, seat: FrontSeat) async throws {
+        let wireLevel: Command.Climate.SeatCoolerLevel =
+            switch level {
+            case .off: .off
+            case .low: .low
+            case .medium: .medium
+            case .high: .high
+            }
+        let wireSeat: Command.Climate.FrontSeatPosition =
+            seat == .driver ? .frontLeft : .frontRight
+        try await VehicleService.shared.run(
+            .climate(.setSeatCooler(level: wireLevel, seat: wireSeat)),
+        )
+    }
+
+    // MARK: - Charge
+
     func openChargePort() async throws {
         try await VehicleService.shared.run(.charge(.openPort))
     }
@@ -48,6 +118,8 @@ struct TeslaCommandExecutor {
     func closeChargePort() async throws {
         try await VehicleService.shared.run(.charge(.closePort))
     }
+
+    // MARK: - Closures
 
     /// Opens or closes the powered trunk (toggle).
     func actuateTrunk() async throws {
@@ -59,7 +131,8 @@ struct TeslaCommandExecutor {
         try await VehicleService.shared.run(.security(.openFrunk))
     }
 
-    /// Media cases are `.togglePlayback` / `.nextTrack` / `.previousTrack`.
+    // MARK: - Media
+
     func mediaPlayPause() async throws {
         try await VehicleService.shared.run(.media(.togglePlayback))
     }
@@ -71,6 +144,16 @@ struct TeslaCommandExecutor {
     func mediaPrevious() async throws {
         try await VehicleService.shared.run(.media(.previousTrack))
     }
+
+    func volumeUp() async throws {
+        try await VehicleService.shared.run(.media(.volumeUp))
+    }
+
+    func volumeDown() async throws {
+        try await VehicleService.shared.run(.media(.volumeDown))
+    }
+
+    // MARK: - State
 
     /// Full state snapshot, but only when a session is already live — nil
     /// otherwise, so the dashboard's poll never triggers endless BLE scan

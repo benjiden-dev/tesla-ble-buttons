@@ -45,10 +45,15 @@ struct StatsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .topLeading) {
-            statusCapsule
-                .padding(.horizontal)
-                .padding(.top, 4)
+        // Matches the dashboard's discrete top band so the two pages line up.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack {
+                statusCapsule
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.bar)
         }
         .task(id: isActive) {
             guard isActive else { return }

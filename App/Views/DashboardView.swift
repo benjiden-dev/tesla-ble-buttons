@@ -84,12 +84,14 @@ struct DashboardView: View {
             Group {
                 if isLandscape {
                     // Two independently scrolling columns — media lives in
-                    // the top bar in landscape.
-                    HStack(alignment: .top, spacing: 12) {
+                    // the top bar in landscape. Tight side padding so the
+                    // cards use the full width available inside the safe
+                    // area (which already excludes the Dynamic Island).
+                    HStack(alignment: .top, spacing: 10) {
                         scrollColumn { climateSection }
                         scrollColumn { vehicleSection }
                     }
-                    .padding(.horizontal)
+                    .padding(.horizontal, 10)
                 } else {
                     ScrollView {
                         VStack(spacing: 12) {
@@ -97,20 +99,21 @@ struct DashboardView: View {
                             climateSection
                             vehicleSection
                         }
-                        .padding(.horizontal)
-                        .padding(.bottom)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 24)
                     }
-                    .contentMargins(.top, 56, for: .scrollContent)
                 }
             }
             .onChange(of: geo.size, initial: true) { _, size in
                 isLandscapeLayout = size.width > size.height
             }
         }
-        // No navigation bar on the dashboard — discrete floating controls
-        // instead (the pushed Settings screen shows its own bar + back).
+        // No navigation bar on the dashboard — a discrete top bar instead
+        // (the pushed Settings screen shows its own bar + back).
         .toolbar(.hidden, for: .navigationBar)
-        .overlay(alignment: .top) { floatingBar }
+        // safeAreaInset (not overlay): the bar is its own band and content
+        // stops above it rather than sliding underneath.
+        .safeAreaInset(edge: .top, spacing: 0) { topBar }
         .sheet(isPresented: $isEditing) {
             EditDashboardView(store: store)
         }
@@ -136,12 +139,15 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: - Floating chrome
+    // MARK: - Top bar
 
-    /// Discrete floating controls in place of a navigation bar: settings
-    /// (top-left), status capsule beside it, edit (top-right). Content
-    /// scrolls underneath.
-    private var floatingBar: some View {
+    /// Discrete full-width band in place of a navigation bar:
+    /// [gear] [status] ······ [now playing · progress · controls] [edit]
+    ///
+    /// Media is pinned to the right, immediately left of Edit. Content is
+    /// laid out inside the safe area, so the Dynamic Island never punches
+    /// through anything; only the bar's material extends edge to edge.
+    private var topBar: some View {
         HStack(spacing: 8) {
             NavigationLink {
                 SettingsView()
@@ -151,18 +157,10 @@ struct DashboardView: View {
 
             statusCapsule
 
+            Spacer(minLength: 8)
+
             if isLandscapeLayout {
-                // Content-sized when idle, so an empty strip doesn't hog
-                // the bar; a leading Spacer keeps Edit pinned right.
-                if !isPlayingSomething {
-                    Spacer()
-                }
                 mediaStrip
-                if !isPlayingSomething {
-                    Spacer()
-                }
-            } else {
-                Spacer()
             }
 
             Button {
@@ -171,8 +169,9 @@ struct DashboardView: View {
                 floatingIcon("pencil")
             }
         }
-        .padding(.horizontal)
-        .padding(.top, 4)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.bar)
     }
 
     private func floatingIcon(_ symbol: String) -> some View {
@@ -332,7 +331,9 @@ struct DashboardView: View {
                 mediaStripTitle
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Capped so a long title can't push the transport
+                    // controls away from the Edit button.
+                    .frame(maxWidth: 260, alignment: .trailing)
             } else {
                 Text("Nothing playing")
                     .font(.footnote)
@@ -343,7 +344,7 @@ struct DashboardView: View {
             if let progress = trackProgress {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
-                    .frame(minWidth: 50, maxWidth: 140)
+                    .frame(width: 90)
             }
 
             HStack(spacing: 6) {
@@ -359,6 +360,7 @@ struct DashboardView: View {
             }
             .layoutPriority(1)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .background(.thinMaterial, in: Capsule())
@@ -587,12 +589,14 @@ struct DashboardView: View {
 
     /// One independently scrolling landscape column. Content starts below
     /// the floating chrome but scrolls underneath it.
+    /// One independently scrolling landscape column. Bottom inset clears
+    /// the TabView page dots.
     private func scrollColumn(@ViewBuilder content: () -> some View) -> some View {
         ScrollView(showsIndicators: false) {
             content()
-                .padding(.bottom)
+                .padding(.top, 10)
+                .padding(.bottom, 28)
         }
-        .contentMargins(.top, 56, for: .scrollContent)
     }
 
     private func sectionCard(
@@ -607,19 +611,21 @@ struct DashboardView: View {
                 .textCase(.uppercase)
             content()
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 
     private func tileGrid(for section: DashboardSection) -> some View {
         let commands = store.tiles
             .compactMap { CommandCatalog.command(id: $0.commandID) }
             .filter { $0.section == section }
+        // Bigger targets — scrolling absorbs the overflow, so tiles can
+        // breathe instead of packing tightly.
         return LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 96), spacing: 10)],
-            spacing: 10,
+            columns: [GridItem(.adaptive(minimum: 116), spacing: 12)],
+            spacing: 12,
         ) {
             ForEach(commands) { command in
                 let display = command.presentation?(snapshot)
@@ -855,20 +861,22 @@ private struct CommandTileView: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 ZStack {
                     Image(systemName: systemImage)
-                        .font(.title2)
+                        .font(.title)
                         .opacity(isRunning ? 0 : 1)
                     if isRunning {
                         ProgressView()
                     }
                 }
                 Text(title)
-                    .font(.caption)
+                    .font(.subheadline)
                     .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
             }
-            .frame(maxWidth: .infinity, minHeight: 68)
+            .frame(maxWidth: .infinity, minHeight: 92)
             .background(.thinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 14))
         }

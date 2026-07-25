@@ -2,7 +2,7 @@ name: iOS Build
 
 on:
   push:
-    branches: [main, "feature/**"]
+    branches: [main, "feature/**", "ci/**", "fix/**"]
   pull_request:
   workflow_dispatch:
 

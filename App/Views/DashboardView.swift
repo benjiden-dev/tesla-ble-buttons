@@ -38,6 +38,9 @@ struct DashboardView: View {
     /// lives outside the GeometryReader) can adapt its layout.
     @State private var isLandscapeLayout = false
 
+    /// Retry closure for the last failed command, surfaced in the banner.
+    @State private var lastFailedAction: (() -> Void)?
+
     // Custom climate popover
     @State private var showTempPopover = false
     @State private var customTempF: Double = 70
@@ -142,7 +145,15 @@ struct DashboardView: View {
             statusCapsule
 
             if isLandscapeLayout {
+                // Content-sized when idle, so an empty strip doesn't hog
+                // the bar; a leading Spacer keeps Edit pinned right.
+                if !isPlayingSomething {
+                    Spacer()
+                }
                 mediaStrip
+                if !isPlayingSomething {
+                    Spacer()
+                }
             } else {
                 Spacer()
             }
@@ -272,14 +283,22 @@ struct DashboardView: View {
     }
 
     /// Compact now-playing strip for the landscape top bar: title · artist,
-    /// a thin progress bar (updates with the 8s poll), and small transport
-    /// controls — all in one pill that fills the bar's unused middle.
+    /// a thin progress bar, and small transport controls. Sizes to content
+    /// when nothing is playing (so the bar isn't a wall of empty material),
+    /// expands to fill the middle when there's a track to show.
     private var mediaStrip: some View {
         HStack(spacing: 10) {
-            mediaStripTitle
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if isPlayingSomething {
+                mediaStripTitle
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("Nothing playing")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
             if let progress = trackProgress {
                 ProgressView(value: progress)
@@ -303,6 +322,12 @@ struct DashboardView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .background(.thinMaterial, in: Capsule())
+    }
+
+    /// True when the car reports an actual track title.
+    private var isPlayingSomething: Bool {
+        guard let title = snapshot?.media?.nowPlayingTitle else { return false }
+        return !title.isEmpty
     }
 
     private var mediaStripTitle: Text {
@@ -531,28 +556,43 @@ struct DashboardView: View {
     }
 
     /// Floating bottom banner: red for real failures, quiet secondary for
-    /// "already set" notices (which also auto-dismiss). Tap to dismiss.
-    /// Lives outside the scroll views so it's visible in both orientations.
+    /// notices ("already set", "connecting…") which auto-dismiss. Tap to
+    /// dismiss. Connection failures offer a Retry button rather than just
+    /// stating the problem. Lives outside the scroll views so it's visible
+    /// in both orientations.
     @ViewBuilder
     private var errorBanner: some View {
         if let text = commandError ?? commandNotice {
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(
-                    commandError != nil
-                        ? AnyShapeStyle(.red)
-                        : AnyShapeStyle(.secondary),
-                )
-                .lineLimit(2)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal)
-                .padding(.bottom, 8)
-                .onTapGesture {
-                    commandError = nil
-                    commandNotice = nil
+            HStack(spacing: 10) {
+                Text(text)
+                    .font(.footnote)
+                    .foregroundStyle(
+                        commandError != nil
+                            ? AnyShapeStyle(.red)
+                            : AnyShapeStyle(.secondary),
+                    )
+                    .lineLimit(2)
+
+                if let retry = lastFailedAction {
+                    Button("Retry") {
+                        commandError = nil
+                        retry()
+                    }
+                    .font(.footnote.weight(.medium))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
                 }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+            .onTapGesture {
+                commandError = nil
+                commandNotice = nil
+                lastFailedAction = nil
+            }
         }
     }
 
@@ -628,9 +668,25 @@ struct DashboardView: View {
         runningID = id
         commandError = nil
         commandNotice = nil
+        lastFailedAction = nil
+
+        // Cold start: tell the user we're bringing the link up rather than
+        // leaving a silent spinner (scan + connect + handshake takes a few
+        // seconds). Cancelled as soon as the command settles.
+        let connectHint = Task {
+            guard await VehicleService.shared.latestState != .connected else { return }
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            commandNotice = "Connecting to the car…"
+        }
+
         Task {
             do {
                 let outcome = try await action()
+                connectHint.cancel()
+                if commandNotice == "Connecting to the car…" {
+                    commandNotice = nil
+                }
                 if case .alreadySatisfied(let reason) = outcome {
                     showNotice("\(title): \(Self.prettyReason(reason))")
                 }
@@ -641,7 +697,14 @@ struct DashboardView: View {
                     await refreshSnapshot()
                 }
             } catch {
-                commandError = "\(title): \(Self.message(for: error))"
+                connectHint.cancel()
+                commandNotice = nil
+                commandError = Self.bannerMessage(title: title, error: error)
+                if Self.isRetryable(error) {
+                    lastFailedAction = {
+                        runRaw(id: id, title: title, onFailure: onFailure, action)
+                    }
+                }
                 onFailure?()
             }
             runningID = nil
@@ -711,15 +774,51 @@ struct DashboardView: View {
         }
     }
 
-    private static func message(for error: Error) -> String {
-        if let ble = error as? TeslaBLEError,
-           case .commandRejected(let code, let reason) = ble
-        {
-            if let reason {
-                return "rejected (\(prettyReason(reason)))"
-            }
-            return "rejected (code \(code))"
+    /// Connection-class failures are worth a Retry button; command
+    /// rejections and config problems are not.
+    private static func isRetryable(_ error: Error) -> Bool {
+        guard let ble = error as? TeslaBLEError else { return false }
+        switch ble {
+        case .scanTimeout, .connectionFailed, .commandTimeout, .notConnected:
+            return true
+        default:
+            return false
         }
+    }
+
+    /// Plain-language banner text. Connection problems get a full sentence
+    /// without the command name prefix (the command is beside the point if
+    /// the car isn't reachable); other failures stay prefixed.
+    private static func bannerMessage(title: String, error: Error) -> String {
+        if let ble = error as? TeslaBLEError {
+            switch ble {
+            case .scanTimeout:
+                return "Can't find the car — move closer or wake it, then retry."
+            case .connectionFailed:
+                return "Bluetooth connection dropped. Try again."
+            case .commandTimeout:
+                return "The car didn't respond in time. Try again."
+            case .notConnected:
+                return "Not connected to the car yet. Try again."
+            case .bluetoothUnavailable:
+                return "Bluetooth is off or not permitted for this app."
+            case .handshakeFailed:
+                return "Couldn't authenticate with the car. Re-pair in Settings if this persists."
+            case .keychain:
+                return "Couldn't read this phone's vehicle key. Re-pair in Settings."
+            case .commandRejected(let code, let reason):
+                if let reason {
+                    return "\(title): rejected (\(prettyReason(reason)))"
+                }
+                return "\(title): rejected (code \(code))"
+            default:
+                break
+            }
+        }
+        return "\(title): \(message(for: error))"
+    }
+
+    private static func message(for error: Error) -> String {
         if let localized = (error as? LocalizedError)?.errorDescription {
             return localized
         }

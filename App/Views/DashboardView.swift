@@ -45,8 +45,13 @@ struct DashboardView: View {
 
     private let executor: TeslaCommandExecutor
 
-    /// Snapshot poll cadence while the dashboard is on screen.
-    private static let snapshotPollSeconds = 8
+    /// Snapshot poll cadence while the dashboard is on screen and someone
+    /// is around to look at it.
+    private static let snapshotPollSeconds = 5
+
+    /// How often to check for reconnection while polling is paused
+    /// (local state read only — zero BLE traffic).
+    private static let pausedProbeSeconds = 10
 
     init(executor: TeslaCommandExecutor = TeslaCommandExecutor()) {
         self.executor = executor
@@ -586,11 +591,38 @@ struct DashboardView: View {
     /// cancels this loop automatically when the view disappears. Gated on an
     /// already-live session inside the executor, so it never spins BLE scans
     /// while away from the car.
+    ///
+    /// Sleep-safety: when the car is in Park with no user present, polling
+    /// pauses AND the BLE session is dropped, so this app can never be the
+    /// reason the vehicle stays awake. It resumes automatically once
+    /// anything reconnects (a command tap, or the app returning to the
+    /// foreground — scene activation calls connectNow).
     private func pollSnapshot() async {
         while !Task.isCancelled {
             await refreshSnapshot()
+
+            if shouldPauseForSleep {
+                showNotice("Pausing updates so the car can sleep")
+                await VehicleService.shared.disconnectNow()
+                while !Task.isCancelled {
+                    if await VehicleService.shared.latestState == .connected {
+                        break
+                    }
+                    try? await Task.sleep(for: .seconds(Self.pausedProbeSeconds))
+                }
+                continue
+            }
+
             try? await Task.sleep(for: .seconds(Self.snapshotPollSeconds))
         }
+    }
+
+    /// True when the car reports Park AND explicitly reports no user
+    /// present. Unknown/missing state never pauses (conservative).
+    private var shouldPauseForSleep: Bool {
+        guard let snap = snapshot else { return false }
+        return snap.drive?.shiftState == .park
+            && snap.closures?.isUserPresent == false
     }
 
     private func refreshSnapshot() async {

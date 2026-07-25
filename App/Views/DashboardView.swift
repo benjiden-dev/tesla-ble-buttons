@@ -38,6 +38,11 @@ struct DashboardView: View {
     /// lives outside the GeometryReader) can adapt its layout.
     @State private var isLandscapeLayout = false
 
+    // Custom climate popover
+    @State private var showTempPopover = false
+    @State private var customTempF: Double = 70
+    @AppStorage(AppConstants.defaultTempKey) private var defaultTempF: Int = 70
+
     // Last-sent local state for controls the snapshot doesn't report back.
     @State private var keeperOn = false
     @State private var driverVent: TeslaCommandExecutor.VentLevel = .off
@@ -344,8 +349,74 @@ struct DashboardView: View {
                     )
                 }
                 tileGrid(for: .climate)
+                setClimateButton
             }
         }
+    }
+
+    /// "…or pick an exact temperature": pops an anchored slider popover.
+    private var setClimateButton: some View {
+        Button {
+            customTempF = seededTempF
+            showTempPopover = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "thermometer.medium")
+                Text("Set Climate")
+            }
+            .font(.subheadline)
+            .frame(maxWidth: .infinity, minHeight: 34)
+        }
+        .buttonStyle(.bordered)
+        .disabled(runningID != nil)
+        .popover(isPresented: $showTempPopover, arrowEdge: .bottom) {
+            tempPopover
+        }
+    }
+
+    /// Seed the slider from the car's current driver setpoint when known,
+    /// otherwise the Settings default.
+    private var seededTempF: Double {
+        if let celsius = snapshot?.climate?.driverTempSettingCelsius {
+            return (celsius * 9 / 5 + 32).rounded()
+        }
+        return Double(defaultTempF)
+    }
+
+    private var tempPopover: some View {
+        VStack(spacing: 14) {
+            Text("\(Int(customTempF))°F")
+                .font(.system(size: 38, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+
+            Slider(value: $customTempF, in: 59 ... 83, step: 1) {
+                Text("Temperature")
+            } minimumValueLabel: {
+                Text("59")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } maximumValueLabel: {
+                Text("83")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(minWidth: 240)
+
+            Button {
+                showTempPopover = false
+                let target = Int(customTempF)
+                runRaw(id: "climate.custom", title: "Climate \(target)°F") {
+                    try await executor.climateOn()
+                    return try await executor.setTemperature(fahrenheit: Double(target))
+                }
+            } label: {
+                Label("Set & Start", systemImage: "fanblades.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
+        .presentationCompactAdaptation(.popover)
     }
 
     /// Two-state Climate Keeper toggle (Off / Keep). Dog and Camp modes are

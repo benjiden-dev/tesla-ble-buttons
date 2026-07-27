@@ -10,6 +10,12 @@
 //  which is otherwise dropped entirely — TeslaVehicleClient silently
 //  discards its logs unless a logger is supplied at init.
 //
+//  Concurrency: the store is @MainActor (it drives SwiftUI). Callers from
+//  other isolation domains — the VehicleService actor, the library's
+//  Sendable logger shim — go through `Diag.log`, which is nonisolated and
+//  hops to the main actor. Never reference `DiagnosticsLog.shared` directly
+//  from an actor or nonisolated context.
+//
 
 import Foundation
 import OSLog
@@ -21,8 +27,23 @@ struct DiagnosticEntry: Identifiable, Sendable {
     let category: String
     let message: String
 
+    /// Wall-clock stamp for display. Uses `Date.FormatStyle` rather than a
+    /// `DateFormatter` static, which would be non-Sendable shared state.
+    var timestamp: String {
+        date.formatted(.dateTime.hour().minute().second())
+    }
+
     var line: String {
-        "\(DiagnosticsLog.timeFormatter.string(from: date))  [\(category)] \(message)"
+        "\(timestamp)  [\(category)] \(message)"
+    }
+}
+
+/// Nonisolated logging entry point, safe to call from anywhere.
+enum Diag {
+    static func log(_ category: String, _ message: String) {
+        Task { @MainActor in
+            DiagnosticsLog.shared.append(category: category, message)
+        }
     }
 }
 
@@ -36,12 +57,6 @@ final class DiagnosticsLog {
 
     private static let capacity = 500
     private let logger = Logger(subsystem: AppConstants.bundleRoot, category: "diagnostics")
-
-    static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss.SSS"
-        return formatter
-    }()
 
     func append(category: String, _ message: String) {
         entries.insert(
@@ -61,14 +76,6 @@ final class DiagnosticsLog {
     /// Oldest-first plain text, for the share sheet.
     var exportText: String {
         entries.reversed().map(\.line).joined(separator: "\n")
-    }
-
-    /// Thread-safe entry point for non-main-actor callers (the BLE actor,
-    /// the library's logger shim).
-    nonisolated func record(category: String, _ message: String) {
-        Task { @MainActor in
-            append(category: category, message)
-        }
     }
 }
 
@@ -95,6 +102,6 @@ struct AppTeslaBLELogger: TeslaBLELogger {
             case .warning: "ble/warn"
             case .error: "ble/error"
             }
-        DiagnosticsLog.shared.record(category: prefix, message())
+        Diag.log(prefix, message())
     }
 }

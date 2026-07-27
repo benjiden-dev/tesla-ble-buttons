@@ -50,7 +50,7 @@ struct DiagnosticsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(entry.message)
                                 .font(.system(.caption, design: .monospaced))
-                            Text("\(DiagnosticsLog.timeFormatter.string(from: entry.date))  ·  \(entry.category)")
+                            Text("\(entry.timestamp)  ·  \(entry.category)")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }

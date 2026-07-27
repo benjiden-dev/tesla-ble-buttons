@@ -66,7 +66,7 @@ actor VehicleService {
 
     private func broadcast(_ state: ConnectionState) {
         if state != latestState {
-            DiagnosticsLog.shared.record(category: "conn", "state → \(state)")
+            Diag.log("conn", "state → \(state)")
         }
         latestState = state
         for continuation in continuations.values {
@@ -136,20 +136,17 @@ actor VehicleService {
         do {
             try await session.send(command)
             scheduleIdleTeardown()
-            DiagnosticsLog.shared.record(category: "cmd", "sent \(command)")
+            Diag.log("cmd", "sent \(command)")
             return .executed
         } catch let error as TeslaBLEError {
             scheduleIdleTeardown()
             if case .commandRejected(_, let reason) = error, Self.isBenignRejection(reason) {
                 logger.info("redundant command (\(reason ?? "already set", privacy: .public)) — treated as success")
-                DiagnosticsLog.shared.record(
-                    category: "cmd",
-                    "already satisfied: \(command) — \(reason ?? "already set")",
-                )
+                Diag.log("cmd", "already satisfied: \(command) — \(reason ?? "already set")")
                 return .alreadySatisfied(reason: reason)
             }
             logger.error("command failed: \(String(describing: error), privacy: .public)")
-            DiagnosticsLog.shared.record(category: "cmd/error", "\(command) failed: \(error)")
+            Diag.log("cmd/error", "\(command) failed: \(error)")
             throw error
         } catch {
             scheduleIdleTeardown()
@@ -215,15 +212,20 @@ actor VehicleService {
         guard state == .connected else { return nil }
         let snapshot = try await existing.fetch(.categories([.media, .mediaDetail]))
         scheduleIdleTeardown()
-        logger.debug(
+        // Mirrored into the in-app log too — this is the line that answers
+        // whether missing now-playing info is car-side or ours (issue #4).
+        Diag.log(
+            "media",
             """
-            media fetch: title=\(snapshot.media?.nowPlayingTitle ?? "nil", privacy: .public) \
-            artist=\(snapshot.media?.nowPlayingArtist ?? "nil", privacy: .public) \
-            album=\(snapshot.mediaDetail?.nowPlayingAlbum ?? "nil", privacy: .public) \
-            station=\(snapshot.mediaDetail?.nowPlayingStation ?? "nil", privacy: .public) \
-            source=\(snapshot.mediaDetail?.nowPlayingSource ?? "nil", privacy: .public) \
-            a2dp=\(snapshot.mediaDetail?.a2dpSourceName ?? "nil", privacy: .public) \
-            remote=\(String(describing: snapshot.media?.remoteControlEnabled), privacy: .public)
+            targeted fetch: mediaSection=\(snapshot.media == nil ? "NIL" : "present") \
+            detailSection=\(snapshot.mediaDetail == nil ? "NIL" : "present") \
+            title=\(snapshot.media?.nowPlayingTitle ?? "nil") \
+            artist=\(snapshot.media?.nowPlayingArtist ?? "nil") \
+            album=\(snapshot.mediaDetail?.nowPlayingAlbum ?? "nil") \
+            station=\(snapshot.mediaDetail?.nowPlayingStation ?? "nil") \
+            source=\(snapshot.mediaDetail?.nowPlayingSource ?? "nil") \
+            a2dp=\(snapshot.mediaDetail?.a2dpSourceName ?? "nil") \
+            remote=\(String(describing: snapshot.media?.remoteControlEnabled))
             """,
         )
         return (snapshot.media, snapshot.mediaDetail)

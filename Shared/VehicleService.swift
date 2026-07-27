@@ -214,6 +214,8 @@ actor VehicleService {
         scheduleIdleTeardown()
         // Mirrored into the in-app log too — this is the line that answers
         // whether missing now-playing info is car-side or ours (issue #4).
+        // The string is an autoclosure, so with capture off it's never
+        // built — this runs on every fallback fetch.
         Diag.log(
             "media",
             """

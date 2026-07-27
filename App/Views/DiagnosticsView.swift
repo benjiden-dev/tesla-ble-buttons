@@ -9,15 +9,31 @@
 
 import SwiftUI
 import TeslaBLE
+import UIKit
 
 struct DiagnosticsView: View {
     @State private var log = DiagnosticsLog.shared
     @State private var isDumping = false
+    @State private var exportText: String?
 
     private let executor = TeslaCommandExecutor()
 
     var body: some View {
         List {
+            Section {
+                Toggle("Capture BLE Log", isOn: Bindable(log).isCapturing)
+            } header: {
+                Text("Capture")
+            } footer: {
+                Text(
+                    """
+                    Off by default and never persists across launches. \
+                    Turns itself off automatically after 15 minutes, keeps \
+                    at most 500 entries, and collapses repeated lines.
+                    """,
+                )
+            }
+
             Section {
                 Button {
                     dumpSnapshot()
@@ -48,7 +64,7 @@ struct DiagnosticsView: View {
                 } else {
                     ForEach(log.entries) { entry in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.message)
+                            Text(entry.displayMessage)
                                 .font(.system(.caption, design: .monospaced))
                             Text("\(entry.timestamp)  ·  \(entry.category)")
                                 .font(.caption2)
@@ -62,7 +78,12 @@ struct DiagnosticsView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    ShareLink(item: log.exportText) {
+                    // Built on demand: log.makeExportText() is O(n) and the
+                    // view re-renders on every new entry, so this must not
+                    // live in the view body as a computed property.
+                    Button {
+                        exportText = log.makeExportText()
+                    } label: {
                         Label("Share Log", systemImage: "square.and.arrow.up")
                     }
                     Button(role: .destructive) {
@@ -75,6 +96,14 @@ struct DiagnosticsView: View {
                 }
             }
         }
+        .sheet(isPresented: Binding(
+            get: { exportText != nil },
+            set: { if !$0 { exportText = nil } },
+        )) {
+            if let exportText {
+                ShareSheet(text: exportText)
+            }
+        }
     }
 
     /// Logs every field of a fresh snapshot — the "show me the raw data"
@@ -84,19 +113,17 @@ struct DiagnosticsView: View {
         isDumping = true
         Task {
             defer { isDumping = false }
-            let log = DiagnosticsLog.shared
-
             do {
                 guard let snap = try await executor.snapshotIfConnected() else {
-                    log.append(category: "dump", "No live connection — connect first (tap any control).")
+                    Diag.logForced("dump", "No live connection — connect first (tap any control).")
                     return
                 }
 
-                log.append(category: "dump", "── full snapshot ──")
+                Diag.logForced("dump", "── full snapshot ──")
 
                 if let c = snap.charge {
-                    log.append(
-                        category: "charge",
+                    Diag.logForced(
+                        "charge",
                         """
                         level=\(str(c.batteryLevel)) range=\(str(c.batteryRangeMiles)) \
                         est=\(str(c.estBatteryRangeMiles)) status=\(str(c.chargingStatus)) \
@@ -107,12 +134,12 @@ struct DiagnosticsView: View {
                         """,
                     )
                 } else {
-                    log.append(category: "charge", "nil (car omitted charge section)")
+                    Diag.logForced("charge", "nil (car omitted charge section)")
                 }
 
                 if let d = snap.drive {
-                    log.append(
-                        category: "drive",
+                    Diag.logForced(
+                        "drive",
                         """
                         shift=\(str(d.shiftState)) speed=\(str(d.speedMph)) \
                         powerKW=\(str(d.powerKW)) odo=\(str(d.odometerHundredthsMile)) \
@@ -121,12 +148,12 @@ struct DiagnosticsView: View {
                         """,
                     )
                 } else {
-                    log.append(category: "drive", "nil (car omitted drive section)")
+                    Diag.logForced("drive", "nil (car omitted drive section)")
                 }
 
                 if let cl = snap.climate {
-                    log.append(
-                        category: "climate",
+                    Diag.logForced(
+                        "climate",
                         """
                         inside=\(str(cl.insideTempCelsius)) outside=\(str(cl.outsideTempCelsius)) \
                         driverSet=\(str(cl.driverTempSettingCelsius)) \
@@ -137,12 +164,12 @@ struct DiagnosticsView: View {
                         """,
                     )
                 } else {
-                    log.append(category: "climate", "nil (car omitted climate section)")
+                    Diag.logForced("climate", "nil (car omitted climate section)")
                 }
 
                 if let cs = snap.closures {
-                    log.append(
-                        category: "closures",
+                    Diag.logForced(
+                        "closures",
                         """
                         locked=\(str(cs.locked)) userPresent=\(str(cs.isUserPresent)) \
                         frunk=\(str(cs.frontTrunk)) trunk=\(str(cs.rearTrunk)) \
@@ -152,32 +179,31 @@ struct DiagnosticsView: View {
                         """,
                     )
                 } else {
-                    log.append(category: "closures", "nil (car omitted closures section)")
+                    Diag.logForced("closures", "nil (car omitted closures section)")
                 }
 
                 // The interesting one for issue #4.
                 logMedia(label: "media (from full snapshot)", snap.media, snap.mediaDetail)
 
-                log.append(category: "dump", "── media-only fetch ──")
+                Diag.logForced("dump", "── media-only fetch ──")
                 if let (media, detail) = try await executor.mediaIfConnected() {
                     logMedia(label: "media (targeted fetch)", media, detail)
                 } else {
-                    log.append(category: "media", "media-only fetch returned nil (not connected)")
+                    Diag.logForced("media", "media-only fetch returned nil (not connected)")
                 }
             } catch {
-                log.append(category: "dump", "failed: \(String(describing: error))")
+                Diag.logForced("dump", "failed: \(String(describing: error))")
             }
         }
     }
 
     private func logMedia(label: String, _ media: MediaState?, _ detail: MediaDetailState?) {
-        let log = DiagnosticsLog.shared
         guard media != nil || detail != nil else {
-            log.append(category: "media", "\(label): BOTH SECTIONS NIL — car returned no media data")
+            Diag.logForced("media", "\(label): BOTH SECTIONS NIL — car returned no media data")
             return
         }
-        log.append(
-            category: "media",
+        Diag.logForced(
+            "media",
             """
             \(label): title=\(str(media?.nowPlayingTitle)) artist=\(str(media?.nowPlayingArtist)) \
             volume=\(str(media?.audioVolume))/\(str(media?.audioVolumeMax)) \
@@ -197,4 +223,16 @@ struct DiagnosticsView: View {
         }
         return String(describing: value)
     }
+}
+
+/// UIActivityViewController wrapper. Used instead of `ShareLink` so the
+/// export text is built once, on demand, rather than on every view render.
+private struct ShareSheet: UIViewControllerRepresentable {
+    let text: String
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [text], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

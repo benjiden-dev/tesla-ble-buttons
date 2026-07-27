@@ -91,12 +91,16 @@ struct StatsView: View {
                     label: "mph",
                     tint: .blue,
                 )
+                // Bipolar: zero sits at the arc's midpoint, regen sweeps
+                // left (green), draw sweeps right (orange). Each half is
+                // scaled to its own limit — regen never reaches 250 kW.
                 ArcGauge(
                     value: Double(drive?.powerKW ?? 0),
                     range: -100 ... 250,
                     display: "\(drive?.powerKW ?? 0)",
                     label: "kW",
                     tint: (drive?.powerKW ?? 0) < 0 ? .green : .orange,
+                    centerOrigin: true,
                 )
             }
             rangeLine
@@ -293,41 +297,102 @@ struct StatsView: View {
 }
 
 /// Minimal automotive arc gauge: 270° track starting at the lower-left.
+///
+/// `centerOrigin` switches to a bipolar dial for signed values like power:
+/// zero sits at the top (arc midpoint), negatives fill counter-clockwise and
+/// positives clockwise. The two halves are scaled independently to their own
+/// limits, so a −100…250 range still puts zero dead center — the same split
+/// scale Tesla's own power meter uses.
 private struct ArcGauge: View {
     let value: Double
     let range: ClosedRange<Double>
     let display: String
     let label: String
     let tint: Color
+    var centerOrigin: Bool = false
 
-    private var fraction: Double {
-        let clamped = min(max(value, range.lowerBound), range.upperBound)
-        return (clamped - range.lowerBound) / (range.upperBound - range.lowerBound)
+    /// Portion of the full circle the visible arc spans (270°).
+    private static let sweep = 0.75
+
+    private var clamped: Double {
+        min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    /// Trim start/end for the value fill, in circle fractions.
+    private var fill: (start: Double, end: Double) {
+        guard centerOrigin else {
+            let span = range.upperBound - range.lowerBound
+            let fraction = span > 0 ? (clamped - range.lowerBound) / span : 0
+            return (0, Self.sweep * fraction)
+        }
+        let mid = Self.sweep / 2
+        if clamped >= 0 {
+            let fraction = range.upperBound > 0 ? clamped / range.upperBound : 0
+            return (mid, mid + mid * fraction)
+        }
+        let fraction = range.lowerBound < 0 ? clamped / range.lowerBound : 0
+        return (mid - mid * fraction, mid)
     }
 
     var body: some View {
-        ZStack {
-            Circle()
-                .trim(from: 0, to: 0.75)
-                .stroke(.quaternary, style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                .rotationEffect(.degrees(135))
-            Circle()
-                .trim(from: 0, to: 0.75 * fraction)
-                .stroke(tint, style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                .rotationEffect(.degrees(135))
-                .animation(.easeOut(duration: 0.3), value: fraction)
-            VStack(spacing: 0) {
-                Text(display)
-                    .font(.system(size: 40, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                Text(label)
-                    .font(.caption)
+        VStack(spacing: 6) {
+            ZStack {
+                Circle()
+                    .trim(from: 0, to: Self.sweep)
+                    .stroke(.quaternary, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                    .rotationEffect(.degrees(135))
+
+                // Zero marker at the top for bipolar dials.
+                if centerOrigin {
+                    Circle()
+                        .trim(from: Self.sweep / 2 - 0.002, to: Self.sweep / 2 + 0.002)
+                        .stroke(.secondary, style: StrokeStyle(lineWidth: 14))
+                        .rotationEffect(.degrees(135))
+                }
+
+                Circle()
+                    .trim(from: fill.start, to: fill.end)
+                    .stroke(tint, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                    .rotationEffect(.degrees(135))
+                    .animation(.easeOut(duration: 0.3), value: fill.end)
+                    .animation(.easeOut(duration: 0.3), value: fill.start)
+
+                VStack(spacing: 0) {
+                    Text(display)
+                        .font(.system(size: 40, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                    Text(label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(18)
+
+                // End-of-scale labels tucked under the arc's open ends.
+                VStack {
+                    Spacer()
+                    HStack {
+                        Text(Self.tickLabel(range.lowerBound))
+                        Spacer()
+                        Text(Self.tickLabel(range.upperBound))
+                    }
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                }
             }
-            .padding(18)
+            .frame(width: 150, height: 150)
+
+            if centerOrigin {
+                Text("regen ← 0 → power")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
-        .frame(width: 150, height: 150)
+    }
+
+    private static func tickLabel(_ value: Double) -> String {
+        String(Int(value.rounded()))
     }
 }

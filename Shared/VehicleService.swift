@@ -31,6 +31,10 @@ actor VehicleService {
     private let keyStore = KeychainTeslaKeyStore(service: AppConstants.keychainService)
     private let logger = Logger(subsystem: AppConstants.bundleRoot, category: "vehicle-service")
 
+    /// Sink for the TeslaBLE library's internal logs. Without this the
+    /// library discards them silently — see DiagnosticsLog.
+    private static let bleLogger = AppTeslaBLELogger()
+
     private var client: TeslaVehicleClient?
     private var forwardTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
@@ -61,6 +65,9 @@ actor VehicleService {
     }
 
     private func broadcast(_ state: ConnectionState) {
+        if state != latestState {
+            Diag.log("conn", "state → \(state)")
+        }
         latestState = state
         for continuation in continuations.values {
             continuation.yield(state)
@@ -87,7 +94,7 @@ actor VehicleService {
 
         await teardown()
 
-        let pairingClient = TeslaVehicleClient(vin: vin, keyStore: keyStore)
+        let pairingClient = TeslaVehicleClient(vin: vin, keyStore: keyStore, logger: Self.bleLogger)
         do {
             try await pairingClient.connect(mode: .pairing)
             try await pairingClient.send(
@@ -129,14 +136,17 @@ actor VehicleService {
         do {
             try await session.send(command)
             scheduleIdleTeardown()
+            Diag.log("cmd", "sent \(command)")
             return .executed
         } catch let error as TeslaBLEError {
             scheduleIdleTeardown()
             if case .commandRejected(_, let reason) = error, Self.isBenignRejection(reason) {
                 logger.info("redundant command (\(reason ?? "already set", privacy: .public)) — treated as success")
+                Diag.log("cmd", "already satisfied: \(command) — \(reason ?? "already set")")
                 return .alreadySatisfied(reason: reason)
             }
             logger.error("command failed: \(String(describing: error), privacy: .public)")
+            Diag.log("cmd/error", "\(command) failed: \(error)")
             throw error
         } catch {
             scheduleIdleTeardown()
@@ -192,6 +202,37 @@ actor VehicleService {
     private var cachedSnapshotValue: TeslaVehicleSnapshot?
     private var cachedSnapshotAt: Date?
 
+    /// Media-only fetch. Some firmware omits media sections from the
+    /// combined `.all` response even while a track is playing; requesting
+    /// the two media categories on their own reliably returns them.
+    /// Connected-only, like the other fetches.
+    func fetchMediaIfConnected() async throws -> (MediaState?, MediaDetailState?)? {
+        guard let existing = client else { return nil }
+        let state = await existing.state
+        guard state == .connected else { return nil }
+        let snapshot = try await existing.fetch(.categories([.media, .mediaDetail]))
+        scheduleIdleTeardown()
+        // Mirrored into the in-app log too — this is the line that answers
+        // whether missing now-playing info is car-side or ours (issue #4).
+        // The string is an autoclosure, so with capture off it's never
+        // built — this runs on every fallback fetch.
+        Diag.log(
+            "media",
+            """
+            targeted fetch: mediaSection=\(snapshot.media == nil ? "NIL" : "present") \
+            detailSection=\(snapshot.mediaDetail == nil ? "NIL" : "present") \
+            title=\(snapshot.media?.nowPlayingTitle ?? "nil") \
+            artist=\(snapshot.media?.nowPlayingArtist ?? "nil") \
+            album=\(snapshot.mediaDetail?.nowPlayingAlbum ?? "nil") \
+            station=\(snapshot.mediaDetail?.nowPlayingStation ?? "nil") \
+            source=\(snapshot.mediaDetail?.nowPlayingSource ?? "nil") \
+            a2dp=\(snapshot.mediaDetail?.a2dpSourceName ?? "nil") \
+            remote=\(String(describing: snapshot.media?.remoteControlEnabled))
+            """,
+        )
+        return (snapshot.media, snapshot.mediaDetail)
+    }
+
     /// Drive-state fast path (a few hundred ms round-trip, designed for
     /// gauge-speed polling). Connected-only, same contract as
     /// `fetchSnapshotIfConnected` — nil without a live session.
@@ -234,7 +275,7 @@ actor VehicleService {
             throw TeslaButtonsError.notPaired
         }
 
-        let newClient = TeslaVehicleClient(vin: vin, keyStore: keyStore)
+        let newClient = TeslaVehicleClient(vin: vin, keyStore: keyStore, logger: Self.bleLogger)
         client = newClient
 
         forwardTask = Task { [weak self] in

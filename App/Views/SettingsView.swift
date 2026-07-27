@@ -17,12 +17,27 @@ struct SettingsView: View {
                 LabeledContent("Connection", value: model.statusLabel)
             }
 
+            // Explicit header:/footer: closures — SwiftUI has no
+            // Section(_ title:, content:, footer:) overload, so a string
+            // title can't be combined with a footer.
             Section {
                 Stepper("Default temperature: \(defaultTempF)°F", value: $defaultTempF, in: 59 ... 83)
             } header: {
                 Text("Climate")
             } footer: {
                 Text("Used by the in-app Set & Start button and the Control Center Climate control.")
+            }
+
+            Section {
+                NavigationLink {
+                    DiagnosticsView()
+                } label: {
+                    Label("Diagnostics", systemImage: "stethoscope")
+                }
+            } header: {
+                Text("Troubleshooting")
+            } footer: {
+                Text("Live BLE log and a raw vehicle-data dump — every field the car reports, including ones the UI doesn't show.")
             }
 
             Section {

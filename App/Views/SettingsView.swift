@@ -17,12 +17,20 @@ struct SettingsView: View {
                 LabeledContent("Connection", value: model.statusLabel)
             }
 
-            Section {
+            Section("Climate") {
                 Stepper("Default temperature: \(defaultTempF)°F", value: $defaultTempF, in: 59 ... 83)
-            } header: {
-                Text("Climate")
             } footer: {
                 Text("Used by the in-app Set & Start button and the Control Center Climate control.")
+            }
+
+            Section {
+                NavigationLink {
+                    DiagnosticsView()
+                } label: {
+                    Label("Diagnostics", systemImage: "stethoscope")
+                }
+            } footer: {
+                Text("Live BLE log and a raw vehicle-data dump — every field the car reports, including ones the UI doesn't show.")
             }
 
             Section {

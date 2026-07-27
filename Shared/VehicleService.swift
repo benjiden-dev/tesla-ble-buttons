@@ -31,6 +31,10 @@ actor VehicleService {
     private let keyStore = KeychainTeslaKeyStore(service: AppConstants.keychainService)
     private let logger = Logger(subsystem: AppConstants.bundleRoot, category: "vehicle-service")
 
+    /// Sink for the TeslaBLE library's internal logs. Without this the
+    /// library discards them silently — see DiagnosticsLog.
+    private static let bleLogger = AppTeslaBLELogger()
+
     private var client: TeslaVehicleClient?
     private var forwardTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
@@ -61,6 +65,9 @@ actor VehicleService {
     }
 
     private func broadcast(_ state: ConnectionState) {
+        if state != latestState {
+            DiagnosticsLog.shared.record(category: "conn", "state → \(state)")
+        }
         latestState = state
         for continuation in continuations.values {
             continuation.yield(state)
@@ -87,7 +94,7 @@ actor VehicleService {
 
         await teardown()
 
-        let pairingClient = TeslaVehicleClient(vin: vin, keyStore: keyStore)
+        let pairingClient = TeslaVehicleClient(vin: vin, keyStore: keyStore, logger: Self.bleLogger)
         do {
             try await pairingClient.connect(mode: .pairing)
             try await pairingClient.send(
@@ -129,14 +136,20 @@ actor VehicleService {
         do {
             try await session.send(command)
             scheduleIdleTeardown()
+            DiagnosticsLog.shared.record(category: "cmd", "sent \(command)")
             return .executed
         } catch let error as TeslaBLEError {
             scheduleIdleTeardown()
             if case .commandRejected(_, let reason) = error, Self.isBenignRejection(reason) {
                 logger.info("redundant command (\(reason ?? "already set", privacy: .public)) — treated as success")
+                DiagnosticsLog.shared.record(
+                    category: "cmd",
+                    "already satisfied: \(command) — \(reason ?? "already set")",
+                )
                 return .alreadySatisfied(reason: reason)
             }
             logger.error("command failed: \(String(describing: error), privacy: .public)")
+            DiagnosticsLog.shared.record(category: "cmd/error", "\(command) failed: \(error)")
             throw error
         } catch {
             scheduleIdleTeardown()
@@ -258,7 +271,7 @@ actor VehicleService {
             throw TeslaButtonsError.notPaired
         }
 
-        let newClient = TeslaVehicleClient(vin: vin, keyStore: keyStore)
+        let newClient = TeslaVehicleClient(vin: vin, keyStore: keyStore, logger: Self.bleLogger)
         client = newClient
 
         forwardTask = Task { [weak self] in

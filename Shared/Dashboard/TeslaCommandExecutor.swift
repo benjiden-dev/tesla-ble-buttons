@@ -363,4 +363,10 @@ struct TeslaCommandExecutor {
     func snapshotIfConnected() async throws -> TeslaVehicleSnapshot? {
         try await VehicleService.shared.fetchSnapshotIfConnected()
     }
+
+    /// Media-only fetch used as a fallback when the combined snapshot comes
+    /// back without now-playing info (see VehicleService for why).
+    func mediaIfConnected() async throws -> (MediaState?, MediaDetailState?)? {
+        try await VehicleService.shared.fetchMediaIfConnected()
+    }
 }

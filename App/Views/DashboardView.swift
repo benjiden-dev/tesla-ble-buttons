@@ -266,7 +266,7 @@ struct DashboardView: View {
 
     private var nowPlaying: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(snapshot?.media?.nowPlayingTitle ?? "Nothing playing")
+            Text(primaryMediaLine ?? "Nothing playing")
                 .font(.headline)
                 .lineLimit(2)
             let subtitle = [
@@ -274,6 +274,7 @@ struct DashboardView: View {
                 snapshot?.mediaDetail?.nowPlayingSource,
             ]
             .compactMap { $0 }
+            .filter { !$0.isEmpty && $0 != primaryMediaLine }
             .joined(separator: " · ")
             if !subtitle.isEmpty {
                 Text(subtitle)
@@ -374,18 +375,45 @@ struct DashboardView: View {
         .background(.thinMaterial, in: Capsule())
     }
 
-    /// True when the car reports an actual track title.
+    /// True when the car reports anything identifying the current audio —
+    /// not just a track title (radio reports a station, some sources only
+    /// report an album or source name).
     private var isPlayingSomething: Bool {
-        guard let title = snapshot?.media?.nowPlayingTitle else { return false }
-        return !title.isEmpty
+        primaryMediaLine != nil
+    }
+
+    /// Best available "what's playing" string, in descending preference.
+    private var primaryMediaLine: String? {
+        let candidates = [
+            snapshot?.media?.nowPlayingTitle,
+            snapshot?.mediaDetail?.nowPlayingStation,
+            snapshot?.mediaDetail?.nowPlayingAlbum,
+            snapshot?.mediaDetail?.a2dpSourceName,
+            snapshot?.mediaDetail?.nowPlayingSource,
+        ]
+        return candidates.compactMap { $0 }.first { !$0.isEmpty }
+    }
+
+    /// Secondary detail: artist when we have one, else the source name
+    /// (skipped when it's already the primary line).
+    private var secondaryMediaLine: String? {
+        if let artist = snapshot?.media?.nowPlayingArtist, !artist.isEmpty {
+            return artist
+        }
+        if let source = snapshot?.mediaDetail?.nowPlayingSource,
+           !source.isEmpty,
+           source != primaryMediaLine
+        {
+            return source
+        }
+        return nil
     }
 
     private var mediaStripTitle: Text {
-        let title = snapshot?.media?.nowPlayingTitle ?? "Nothing playing"
-        var text = Text(title)
+        var text = Text(primaryMediaLine ?? "Nothing playing")
             .font(.footnote.weight(.medium))
-        if let artist = snapshot?.media?.nowPlayingArtist, !artist.isEmpty {
-            text = text + Text(" · \(artist)")
+        if let secondary = secondaryMediaLine {
+            text = text + Text(" · \(secondary)")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -806,6 +834,16 @@ struct DashboardView: View {
             snapshot = try await executor.snapshotIfConnected()
         } catch {
             snapshot = nil
+        }
+
+        // Some firmware returns the combined snapshot without media
+        // sections even while a track is playing. When that happens, ask
+        // for the media categories on their own and merge the result in.
+        if snapshot != nil, (snapshot?.media?.nowPlayingTitle ?? "").isEmpty {
+            if let (media, detail) = try? await executor.mediaIfConnected() ?? (nil, nil) {
+                if let media { snapshot?.media = media }
+                if let detail { snapshot?.mediaDetail = detail }
+            }
         }
     }
 

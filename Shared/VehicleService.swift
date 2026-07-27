@@ -192,6 +192,30 @@ actor VehicleService {
     private var cachedSnapshotValue: TeslaVehicleSnapshot?
     private var cachedSnapshotAt: Date?
 
+    /// Media-only fetch. Some firmware omits media sections from the
+    /// combined `.all` response even while a track is playing; requesting
+    /// the two media categories on their own reliably returns them.
+    /// Connected-only, like the other fetches.
+    func fetchMediaIfConnected() async throws -> (MediaState?, MediaDetailState?)? {
+        guard let existing = client else { return nil }
+        let state = await existing.state
+        guard state == .connected else { return nil }
+        let snapshot = try await existing.fetch(.categories([.media, .mediaDetail]))
+        scheduleIdleTeardown()
+        logger.debug(
+            """
+            media fetch: title=\(snapshot.media?.nowPlayingTitle ?? "nil", privacy: .public) \
+            artist=\(snapshot.media?.nowPlayingArtist ?? "nil", privacy: .public) \
+            album=\(snapshot.mediaDetail?.nowPlayingAlbum ?? "nil", privacy: .public) \
+            station=\(snapshot.mediaDetail?.nowPlayingStation ?? "nil", privacy: .public) \
+            source=\(snapshot.mediaDetail?.nowPlayingSource ?? "nil", privacy: .public) \
+            a2dp=\(snapshot.mediaDetail?.a2dpSourceName ?? "nil", privacy: .public) \
+            remote=\(String(describing: snapshot.media?.remoteControlEnabled), privacy: .public)
+            """,
+        )
+        return (snapshot.media, snapshot.mediaDetail)
+    }
+
     /// Drive-state fast path (a few hundred ms round-trip, designed for
     /// gauge-speed polling). Connected-only, same contract as
     /// `fetchSnapshotIfConnected` — nil without a live session.
